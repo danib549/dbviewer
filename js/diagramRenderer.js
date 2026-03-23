@@ -56,7 +56,7 @@ const DiagramRenderer = (() => {
         tables = tbls;
         relationships = rels;
 
-        // Clear canvas
+        // Clear canvas (keep SVG layer)
         canvas.querySelectorAll('.table-node').forEach(n => n.remove());
 
         // Calculate initial positions
@@ -67,8 +67,12 @@ const DiagramRenderer = (() => {
             renderTableNode(table, i);
         });
 
-        // Draw lines
-        requestAnimationFrame(() => drawAllLines());
+        // Draw lines after DOM is ready with multiple frames for safety
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                drawAllLines();
+            });
+        });
 
         // Update zoom display
         updateZoomLabel();
@@ -81,8 +85,7 @@ const DiagramRenderer = (() => {
         if (Object.keys(positions).length === tables.length) return;
 
         const cols = Math.ceil(Math.sqrt(tables.length));
-        const spacingX = 280;
-        const spacingY = 50;
+        const spacingX = 300;
         const startX = 60;
         const startY = 60;
 
@@ -96,16 +99,29 @@ const DiagramRenderer = (() => {
 
         const sorted = [...tables].sort((a, b) => (relCounts[b.name] || 0) - (relCounts[a.name] || 0));
 
+        // Track cumulative row heights for variable row heights
+        const rowHeights = {};
+
         sorted.forEach((table, i) => {
             if (positions[table.name]) return;
             const col = i % cols;
             const row = Math.floor(i / cols);
-            // Estimate height based on column count
-            const estimatedHeight = 36 + (table.columns.length * 26) + 8;
+            const estimatedHeight = 40 + (table.columns.length * 26) + 12;
+
+            if (!rowHeights[row]) rowHeights[row] = 0;
+
+            // Calculate Y based on accumulated heights of previous rows
+            let yOffset = startY;
+            for (let r = 0; r < row; r++) {
+                yOffset += (rowHeights[r] || 200) + 60;
+            }
+
             positions[table.name] = {
                 x: startX + col * spacingX,
-                y: startY + row * (Math.max(estimatedHeight, 150) + spacingY),
+                y: yOffset,
             };
+
+            rowHeights[row] = Math.max(rowHeights[row] || 0, estimatedHeight);
         });
     }
 
@@ -118,7 +134,7 @@ const DiagramRenderer = (() => {
 
         const node = document.createElement('div');
         node.className = `table-node table-color-${colorIndex}`;
-        node.id = `table-${table.name}`;
+        node.id = `tbl-${sanitizeId(table.name)}`;
         node.style.left = pos.x + 'px';
         node.style.top = pos.y + 'px';
         node.dataset.table = table.name;
@@ -165,7 +181,6 @@ const DiagramRenderer = (() => {
                 <span class="col-type">${col.type}</span>
             `;
 
-            // Double click to view data
             row.addEventListener('dblclick', () => {
                 if (onTableClick) onTableClick(table);
             });
@@ -175,7 +190,6 @@ const DiagramRenderer = (() => {
 
         node.appendChild(colContainer);
 
-        // Single click on node body to preview
         node.addEventListener('dblclick', (e) => {
             if (e.target.closest('.table-node-header')) return;
             if (onTableClick) onTableClick(table);
@@ -184,15 +198,22 @@ const DiagramRenderer = (() => {
         canvas.appendChild(node);
     }
 
+    function sanitizeId(name) {
+        return name.replace(/[^a-zA-Z0-9_-]/g, '_');
+    }
+
+    function getNodeElement(tableName) {
+        return document.getElementById(`tbl-${sanitizeId(tableName)}`);
+    }
+
     // === DRAG ===
     function onDragStart(e, node, tableName) {
         if (e.button !== 0) return;
         e.stopPropagation();
         dragNode = { el: node, name: tableName };
         const rect = node.getBoundingClientRect();
-        const canvasRect = canvas.getBoundingClientRect();
-        dragOffsetX = (e.clientX - rect.left);
-        dragOffsetY = (e.clientY - rect.top);
+        dragOffsetX = (e.clientX - rect.left) / scale;
+        dragOffsetY = (e.clientY - rect.top) / scale;
         node.style.zIndex = 10;
         node.classList.add('highlighted');
     }
@@ -204,8 +225,8 @@ const DiagramRenderer = (() => {
         const touch = e.touches[0];
         dragNode = { el: node, name: tableName };
         const rect = node.getBoundingClientRect();
-        dragOffsetX = touch.clientX - rect.left;
-        dragOffsetY = touch.clientY - rect.top;
+        dragOffsetX = (touch.clientX - rect.left) / scale;
+        dragOffsetY = (touch.clientY - rect.top) / scale;
         node.style.zIndex = 10;
         node.classList.add('highlighted');
     }
@@ -249,7 +270,6 @@ const DiagramRenderer = (() => {
         }
     }
 
-    // Touch pan/drag
     function onTouchStart(e) {
         if (e.target.closest('.table-node')) return;
         if (e.touches.length === 1) {
@@ -294,7 +314,6 @@ const DiagramRenderer = (() => {
         const delta = e.deltaY > 0 ? -0.08 : 0.08;
         const newScale = Math.max(0.2, Math.min(3, scale + delta));
 
-        // Zoom towards mouse position
         const rect = container.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
@@ -304,12 +323,14 @@ const DiagramRenderer = (() => {
 
         scale = newScale;
         applyTransform();
+        drawAllLines();
         updateZoomLabel();
     }
 
     function setZoom(newScale) {
         scale = Math.max(0.2, Math.min(3, newScale));
         applyTransform();
+        drawAllLines();
         updateZoomLabel();
     }
 
@@ -330,17 +351,18 @@ const DiagramRenderer = (() => {
             maxY = Math.max(maxY, y + h);
         });
 
-        const contentW = maxX - minX + 80;
-        const contentH = maxY - minY + 80;
+        const contentW = maxX - minX + 120;
+        const contentH = maxY - minY + 120;
         const scaleX = containerRect.width / contentW;
         const scaleY = containerRect.height / contentH;
         scale = Math.min(scaleX, scaleY, 1.5);
         scale = Math.max(0.2, Math.min(2, scale));
 
-        panX = (containerRect.width - contentW * scale) / 2 - minX * scale + 40;
-        panY = (containerRect.height - contentH * scale) / 2 - minY * scale + 40;
+        panX = (containerRect.width - contentW * scale) / 2 - minX * scale + 60;
+        panY = (containerRect.height - contentH * scale) / 2 - minY * scale + 60;
 
         applyTransform();
+        drawAllLines();
         updateZoomLabel();
     }
 
@@ -353,69 +375,123 @@ const DiagramRenderer = (() => {
     }
 
     // === SVG LINES ===
+    // SVG layer is OUTSIDE the canvas transform, so we need to convert
+    // canvas-local coordinates to screen-relative coordinates for the SVG
     function drawAllLines() {
         svgLayer.innerHTML = '';
 
-        // Need to use positions relative to canvas
+        if (relationships.length === 0) return;
+
         relationships.forEach(rel => {
             drawLine(rel);
         });
     }
 
     function drawLine(rel) {
-        const fromNode = document.getElementById(`table-${rel.fromTable}`);
-        const toNode = document.getElementById(`table-${rel.toTable}`);
+        const fromNode = getNodeElement(rel.fromTable);
+        const toNode = getNodeElement(rel.toTable);
         if (!fromNode || !toNode) return;
 
         // Find the specific column rows
-        const fromColRow = fromNode.querySelector(`[data-column="${rel.fromColumn}"]`);
-        const toColRow = toNode.querySelector(`[data-column="${rel.toColumn}"]`);
+        const fromColRow = fromNode.querySelector(`[data-column="${CSS.escape(rel.fromColumn)}"]`);
+        const toColRow = toNode.querySelector(`[data-column="${CSS.escape(rel.toColumn)}"]`);
 
-        // Get positions relative to canvas (before transform)
-        const fromPos = getColumnAnchor(fromNode, fromColRow, toNode);
-        const toPos = getColumnAnchor(toNode, toColRow, fromNode);
+        // Get anchor points using direct position calculation (canvas-local coordinates)
+        const fromPos = getAnchorPoint(fromNode, fromColRow, toNode);
+        const toPos = getAnchorPoint(toNode, toColRow, fromNode);
+
+        // Convert canvas-local coords to SVG container coords
+        const fromScreen = canvasToContainer(fromPos.x, fromPos.y);
+        const toScreen = canvasToContainer(toPos.x, toPos.y);
 
         // Determine color based on relationship
-        const color = rel.type === '1:1' ? '#22c55e' : '#4da6ff';
+        const color = rel.type === '1:1' ? '#22c55e' : rel.type === 'N:M' ? '#f0b429' : '#4da6ff';
 
         // Draw curved path
-        const path = createCurvedPath(fromPos, toPos, color);
+        const controlOffset = Math.max(50, Math.min(Math.abs(toScreen.x - fromScreen.x) * 0.4, 180));
+        const cp1x = fromPos.side === 'right' ? fromScreen.x + controlOffset : fromScreen.x - controlOffset;
+        const cp2x = toPos.side === 'right' ? toScreen.x + controlOffset : toScreen.x - controlOffset;
+
+        const d = `M ${fromScreen.x} ${fromScreen.y} C ${cp1x} ${fromScreen.y}, ${cp2x} ${toScreen.y}, ${toScreen.x} ${toScreen.y}`;
+
+        // Main visible path
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('class', 'rel-line');
+        path.setAttribute('stroke', color);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke-width', '2');
         svgLayer.appendChild(path);
 
-        // Draw invisible wider path for hover
-        const hoverPath = path.cloneNode();
+        // Wider invisible path for hover
+        const hoverPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        hoverPath.setAttribute('d', d);
         hoverPath.setAttribute('class', 'rel-line-hover');
         hoverPath.setAttribute('stroke', 'transparent');
-        hoverPath.setAttribute('stroke-width', '10');
+        hoverPath.setAttribute('stroke-width', '12');
+        hoverPath.setAttribute('fill', 'none');
         hoverPath.style.pointerEvents = 'stroke';
+        hoverPath.style.cursor = 'pointer';
         svgLayer.appendChild(hoverPath);
 
-        // Draw relationship type label
-        drawRelLabel(fromPos, toPos, rel.type, color);
+        // Relationship label at midpoint
+        const midX = (fromScreen.x + toScreen.x) / 2;
+        const midY = (fromScreen.y + toScreen.y) / 2;
 
-        // Draw cardinality markers
-        drawCardinalityMarkers(fromPos, toPos, rel.type, color);
+        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        const textWidth = rel.type.length * 8 + 10;
+        bg.setAttribute('x', midX - textWidth / 2);
+        bg.setAttribute('y', midY - 10);
+        bg.setAttribute('width', textWidth);
+        bg.setAttribute('height', 20);
+        bg.setAttribute('fill', '#1a1b2e');
+        bg.setAttribute('stroke', color);
+        bg.setAttribute('stroke-width', '1');
+        bg.setAttribute('rx', '4');
+        svgLayer.appendChild(bg);
+
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', midX);
+        text.setAttribute('y', midY + 4);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('class', 'rel-label');
+        text.setAttribute('fill', color);
+        text.setAttribute('font-size', '11');
+        text.textContent = rel.type;
+        svgLayer.appendChild(text);
+
+        // Cardinality markers near endpoints
+        const fLabel = rel.type === '1:1' ? '1' : (rel.type === 'N:M' ? 'N' : 'N');
+        const tLabel = rel.type === 'N:M' ? 'M' : '1';
+        drawMarker(fromScreen.x, fromScreen.y, fromPos.side, fLabel, color);
+        drawMarker(toScreen.x, toScreen.y, toPos.side, tLabel, color);
     }
 
-    function getColumnAnchor(node, colRow, otherNode) {
+    /**
+     * Get anchor point for a column row on a table node (in canvas-local coordinates)
+     */
+    function getAnchorPoint(node, colRow, otherNode) {
         const nodeX = parseFloat(node.style.left);
         const nodeY = parseFloat(node.style.top);
         const nodeW = node.offsetWidth;
         const nodeH = node.offsetHeight;
 
         const otherX = parseFloat(otherNode.style.left);
+        const otherW = otherNode.offsetWidth;
 
-        // Determine which side the line should exit from
-        const exitRight = nodeX + nodeW / 2 < otherX + otherNode.offsetWidth / 2;
+        // Decide which side the connector exits from
+        const nodeCenterX = nodeX + nodeW / 2;
+        const otherCenterX = otherX + otherW / 2;
+        const exitRight = nodeCenterX < otherCenterX;
 
         let y;
         if (colRow) {
-            // Position at the column row center
-            const rowRect = colRow.getBoundingClientRect();
-            const nodeRect = node.getBoundingClientRect();
-            const relativeY = (rowRect.top - nodeRect.top + rowRect.height / 2) / scale;
-            y = nodeY + relativeY;
+            // Calculate Y position of the column row relative to the node
+            const colOffsetTop = colRow.offsetTop;
+            const colHeight = colRow.offsetHeight;
+            y = nodeY + colOffsetTop + colHeight / 2;
         } else {
+            // Fallback: center of the node
             y = nodeY + nodeH / 2;
         }
 
@@ -426,75 +502,27 @@ const DiagramRenderer = (() => {
         };
     }
 
-    function createCurvedPath(from, to, color) {
-        const dx = Math.abs(to.x - from.x);
-        const controlOffset = Math.max(40, Math.min(dx * 0.4, 150));
-
-        const cp1x = from.side === 'right' ? from.x + controlOffset : from.x - controlOffset;
-        const cp2x = to.side === 'right' ? to.x + controlOffset : to.x - controlOffset;
-
-        const d = `M ${from.x} ${from.y} C ${cp1x} ${from.y}, ${cp2x} ${to.y}, ${to.x} ${to.y}`;
-
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', d);
-        path.setAttribute('class', 'rel-line');
-        path.setAttribute('stroke', color);
-        path.setAttribute('fill', 'none');
-        path.setAttribute('stroke-width', '2');
-        return path;
+    /**
+     * Convert canvas-local coordinates to container-relative coordinates
+     * (accounting for pan and scale transforms)
+     */
+    function canvasToContainer(cx, cy) {
+        return {
+            x: cx * scale + panX,
+            y: cy * scale + panY
+        };
     }
 
-    function drawRelLabel(from, to, type, color) {
-        const midX = (from.x + to.x) / 2;
-        const midY = (from.y + to.y) / 2;
-
-        // Background rect
-        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        const textWidth = type.length * 7 + 8;
-        bg.setAttribute('x', midX - textWidth / 2);
-        bg.setAttribute('y', midY - 9);
-        bg.setAttribute('width', textWidth);
-        bg.setAttribute('height', 18);
-        bg.setAttribute('class', 'rel-label-bg');
-        bg.setAttribute('fill', '#1a1b2e');
-        bg.setAttribute('stroke', color);
-        bg.setAttribute('stroke-width', '1');
-        bg.setAttribute('rx', '4');
-        svgLayer.appendChild(bg);
-
-        // Text
+    function drawMarker(x, y, side, label, color) {
+        const offset = side === 'right' ? 14 : -14;
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', midX);
-        text.setAttribute('y', midY + 4);
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('class', 'rel-label');
-        text.setAttribute('fill', color);
-        text.textContent = type;
-        svgLayer.appendChild(text);
-    }
-
-    function drawCardinalityMarkers(from, to, type, color) {
-        // Draw "1" at the "to" side (PK side) and "N" or "1" at the "from" side (FK side)
-        const markerOffset = 15;
-
-        // "From" side marker (FK side - many side)
-        const fromMarkerX = from.side === 'right' ? from.x + markerOffset : from.x - markerOffset;
-        drawSmallMarker(fromMarkerX, from.y - 12, type === '1:1' ? '1' : 'N', color);
-
-        // "To" side marker (PK side - one side)
-        const toMarkerX = to.side === 'right' ? to.x + markerOffset : to.x - markerOffset;
-        drawSmallMarker(toMarkerX, to.y - 12, '1', color);
-    }
-
-    function drawSmallMarker(x, y, label, color) {
-        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', x);
-        text.setAttribute('y', y);
+        text.setAttribute('x', x + offset);
+        text.setAttribute('y', y - 10);
         text.setAttribute('text-anchor', 'middle');
         text.setAttribute('font-size', '10');
         text.setAttribute('font-family', 'monospace');
         text.setAttribute('fill', color);
-        text.setAttribute('opacity', '0.7');
+        text.setAttribute('opacity', '0.8');
         text.textContent = label;
         svgLayer.appendChild(text);
     }
@@ -504,23 +532,20 @@ const DiagramRenderer = (() => {
      */
     function highlightTable(tableName) {
         canvas.querySelectorAll('.table-node').forEach(n => n.classList.remove('highlighted'));
-        const node = document.getElementById(`table-${tableName}`);
+        const node = getNodeElement(tableName);
         if (node) {
             node.classList.add('highlighted');
-            // Scroll into view
             const pos = positions[tableName];
             if (pos) {
                 const containerRect = container.getBoundingClientRect();
                 panX = containerRect.width / 2 - pos.x * scale;
                 panY = containerRect.height / 2 - pos.y * scale;
                 applyTransform();
+                drawAllLines();
             }
         }
     }
 
-    /**
-     * Redraw lines (call after relationship changes)
-     */
     function updateRelationships(rels) {
         relationships = rels;
         drawAllLines();
@@ -528,6 +553,10 @@ const DiagramRenderer = (() => {
 
     function getPositions() {
         return positions;
+    }
+
+    function resetPositions() {
+        positions = {};
     }
 
     function escapeHtml(str) {
@@ -544,5 +573,6 @@ const DiagramRenderer = (() => {
         drawAllLines,
         fitToScreen,
         getPositions,
+        resetPositions,
     };
 })();

@@ -49,6 +49,7 @@
                 <button id="btn-zoom-fit" class="toolbar-btn" title="Fit to screen">Fit</button>
             </div>
             <div class="toolbar-right">
+                <button id="btn-auto-detect" class="toolbar-btn toolbar-btn-accent" title="Deep scan: analyze actual data values to find hidden relationships">Auto Detect</button>
                 <button id="btn-add-csv" class="toolbar-btn" title="Add more CSV files">+ Add CSV</button>
                 <button id="btn-export-sql" class="toolbar-btn" title="Export SQL DDL">Export SQL</button>
                 <button id="btn-export-png" class="toolbar-btn" title="Export as PNG">Export PNG</button>
@@ -73,8 +74,8 @@
 
             <!-- Canvas -->
             <div id="canvas-container" class="canvas-container">
+                <svg id="svg-lines" class="svg-overlay"></svg>
                 <div id="canvas" class="canvas">
-                    <svg id="svg-lines" class="svg-overlay"></svg>
                 </div>
             </div>
         </div>

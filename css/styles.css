@@ -229,6 +229,16 @@ body {
     background: var(--bg-hover);
     color: var(--text-primary);
 }
+.toolbar-btn-accent {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+.toolbar-btn-accent:hover {
+    background: var(--accent-hover);
+    color: white;
+}
 .badge {
     background: var(--accent);
     color: white;
@@ -389,7 +399,7 @@ body {
     transform-origin: 0 0;
 }
 
-/* SVG Overlay */
+/* SVG Overlay - sits on top of canvas, NOT inside it, so it's NOT transformed */
 .svg-overlay {
     position: absolute;
     top: 0;
@@ -398,6 +408,7 @@ body {
     height: 100%;
     pointer-events: none;
     overflow: visible;
+    z-index: 5;
 }
 .svg-overlay line, .svg-overlay path {
     pointer-events: none;

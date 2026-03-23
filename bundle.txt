@@ -50,6 +50,7 @@
                 <button id="btn-zoom-fit" class="toolbar-btn" title="Fit to screen">Fit</button>
             </div>
             <div class="toolbar-right">
+                <button id="btn-auto-detect" class="toolbar-btn toolbar-btn-accent" title="Deep scan: analyze actual data values to find hidden relationships">Auto Detect</button>
                 <button id="btn-add-csv" class="toolbar-btn" title="Add more CSV files">+ Add CSV</button>
                 <button id="btn-export-sql" class="toolbar-btn" title="Export SQL DDL">Export SQL</button>
                 <button id="btn-export-png" class="toolbar-btn" title="Export as PNG">Export PNG</button>
@@ -74,8 +75,8 @@
 
             <!-- Canvas -->
             <div id="canvas-container" class="canvas-container">
+                <svg id="svg-lines" class="svg-overlay"></svg>
                 <div id="canvas" class="canvas">
-                    <svg id="svg-lines" class="svg-overlay"></svg>
                 </div>
             </div>
         </div>
@@ -381,6 +382,16 @@ body {
     background: var(--bg-hover);
     color: var(--text-primary);
 }
+.toolbar-btn-accent {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+.toolbar-btn-accent:hover {
+    background: var(--accent-hover);
+    color: white;
+}
 .badge {
     background: var(--accent);
     color: white;
@@ -541,7 +552,7 @@ body {
     transform-origin: 0 0;
 }
 
-/* SVG Overlay */
+/* SVG Overlay - sits on top of canvas, NOT inside it, so it's NOT transformed */
 .svg-overlay {
     position: absolute;
     top: 0;
@@ -550,6 +561,7 @@ body {
     height: 100%;
     pointer-events: none;
     overflow: visible;
+    z-index: 5;
 }
 .svg-overlay line, .svg-overlay path {
     pointer-events: none;
@@ -998,6 +1010,7 @@ const App = (() => {
         document.getElementById('btn-export-png').addEventListener('click', exportPNG);
         document.getElementById('btn-add-relationship').addEventListener('click', showAddRelModal);
         document.getElementById('btn-save-relationship').addEventListener('click', saveRelationship);
+        document.getElementById('btn-auto-detect').addEventListener('click', runAutoDetect);
 
         // Add more CSVs
         const addCsvInput = document.getElementById('add-csv-input');
@@ -1169,6 +1182,44 @@ const App = (() => {
         renderRelationshipList();
         DiagramRenderer.render(tables, relationships);
         document.getElementById('add-rel-modal').classList.remove('active');
+    }
+
+    // === Auto Detect (deep scan) ===
+    function runAutoDetect() {
+        const btn = document.getElementById('btn-auto-detect');
+        btn.textContent = 'Scanning...';
+        btn.disabled = true;
+
+        // Use setTimeout to let the UI update before the heavy computation
+        setTimeout(() => {
+            try {
+                const newRels = RelationshipDetector.deepScan(tables, relationships);
+                if (newRels.length > 0) {
+                    relationships = relationships.concat(newRels);
+
+                    renderRelationshipList();
+                    DiagramRenderer.render(tables, relationships);
+                    setTimeout(() => DiagramRenderer.fitToScreen(), 150);
+
+                    btn.textContent = `Found ${newRels.length} new!`;
+                    setTimeout(() => {
+                        btn.textContent = 'Auto Detect';
+                        btn.disabled = false;
+                    }, 2000);
+                } else {
+                    btn.textContent = 'No new found';
+                    setTimeout(() => {
+                        btn.textContent = 'Auto Detect';
+                        btn.disabled = false;
+                    }, 2000);
+                }
+            } catch (err) {
+                console.error('Auto detect error:', err);
+                btn.textContent = 'Auto Detect';
+                btn.disabled = false;
+                alert('Error during auto-detection: ' + err.message);
+            }
+        }, 50);
     }
 
     // === Export ===
@@ -1592,7 +1643,7 @@ const DiagramRenderer = (() => {
         tables = tbls;
         relationships = rels;
 
-        // Clear canvas
+        // Clear canvas (keep SVG layer)
         canvas.querySelectorAll('.table-node').forEach(n => n.remove());
 
         // Calculate initial positions
@@ -1603,8 +1654,12 @@ const DiagramRenderer = (() => {
             renderTableNode(table, i);
         });
 
-        // Draw lines
-        requestAnimationFrame(() => drawAllLines());
+        // Draw lines after DOM is ready with multiple frames for safety
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                drawAllLines();
+            });
+        });
 
         // Update zoom display
         updateZoomLabel();
@@ -1617,8 +1672,7 @@ const DiagramRenderer = (() => {
         if (Object.keys(positions).length === tables.length) return;
 
         const cols = Math.ceil(Math.sqrt(tables.length));
-        const spacingX = 280;
-        const spacingY = 50;
+        const spacingX = 300;
         const startX = 60;
         const startY = 60;
 
@@ -1632,16 +1686,29 @@ const DiagramRenderer = (() => {
 
         const sorted = [...tables].sort((a, b) => (relCounts[b.name] || 0) - (relCounts[a.name] || 0));
 
+        // Track cumulative row heights for variable row heights
+        const rowHeights = {};
+
         sorted.forEach((table, i) => {
             if (positions[table.name]) return;
             const col = i % cols;
             const row = Math.floor(i / cols);
-            // Estimate height based on column count
-            const estimatedHeight = 36 + (table.columns.length * 26) + 8;
+            const estimatedHeight = 40 + (table.columns.length * 26) + 12;
+
+            if (!rowHeights[row]) rowHeights[row] = 0;
+
+            // Calculate Y based on accumulated heights of previous rows
+            let yOffset = startY;
+            for (let r = 0; r < row; r++) {
+                yOffset += (rowHeights[r] || 200) + 60;
+            }
+
             positions[table.name] = {
                 x: startX + col * spacingX,
-                y: startY + row * (Math.max(estimatedHeight, 150) + spacingY),
+                y: yOffset,
             };
+
+            rowHeights[row] = Math.max(rowHeights[row] || 0, estimatedHeight);
         });
     }
 
@@ -1654,7 +1721,7 @@ const DiagramRenderer = (() => {
 
         const node = document.createElement('div');
         node.className = `table-node table-color-${colorIndex}`;
-        node.id = `table-${table.name}`;
+        node.id = `tbl-${sanitizeId(table.name)}`;
         node.style.left = pos.x + 'px';
         node.style.top = pos.y + 'px';
         node.dataset.table = table.name;
@@ -1701,7 +1768,6 @@ const DiagramRenderer = (() => {
                 <span class="col-type">${col.type}</span>
             `;
 
-            // Double click to view data
             row.addEventListener('dblclick', () => {
                 if (onTableClick) onTableClick(table);
             });
@@ -1711,7 +1777,6 @@ const DiagramRenderer = (() => {
 
         node.appendChild(colContainer);
 
-        // Single click on node body to preview
         node.addEventListener('dblclick', (e) => {
             if (e.target.closest('.table-node-header')) return;
             if (onTableClick) onTableClick(table);
@@ -1720,15 +1785,22 @@ const DiagramRenderer = (() => {
         canvas.appendChild(node);
     }
 
+    function sanitizeId(name) {
+        return name.replace(/[^a-zA-Z0-9_-]/g, '_');
+    }
+
+    function getNodeElement(tableName) {
+        return document.getElementById(`tbl-${sanitizeId(tableName)}`);
+    }
+
     // === DRAG ===
     function onDragStart(e, node, tableName) {
         if (e.button !== 0) return;
         e.stopPropagation();
         dragNode = { el: node, name: tableName };
         const rect = node.getBoundingClientRect();
-        const canvasRect = canvas.getBoundingClientRect();
-        dragOffsetX = (e.clientX - rect.left);
-        dragOffsetY = (e.clientY - rect.top);
+        dragOffsetX = (e.clientX - rect.left) / scale;
+        dragOffsetY = (e.clientY - rect.top) / scale;
         node.style.zIndex = 10;
         node.classList.add('highlighted');
     }
@@ -1740,8 +1812,8 @@ const DiagramRenderer = (() => {
         const touch = e.touches[0];
         dragNode = { el: node, name: tableName };
         const rect = node.getBoundingClientRect();
-        dragOffsetX = touch.clientX - rect.left;
-        dragOffsetY = touch.clientY - rect.top;
+        dragOffsetX = (touch.clientX - rect.left) / scale;
+        dragOffsetY = (touch.clientY - rect.top) / scale;
         node.style.zIndex = 10;
         node.classList.add('highlighted');
     }
@@ -1785,7 +1857,6 @@ const DiagramRenderer = (() => {
         }
     }
 
-    // Touch pan/drag
     function onTouchStart(e) {
         if (e.target.closest('.table-node')) return;
         if (e.touches.length === 1) {
@@ -1830,7 +1901,6 @@ const DiagramRenderer = (() => {
         const delta = e.deltaY > 0 ? -0.08 : 0.08;
         const newScale = Math.max(0.2, Math.min(3, scale + delta));
 
-        // Zoom towards mouse position
         const rect = container.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
@@ -1840,12 +1910,14 @@ const DiagramRenderer = (() => {
 
         scale = newScale;
         applyTransform();
+        drawAllLines();
         updateZoomLabel();
     }
 
     function setZoom(newScale) {
         scale = Math.max(0.2, Math.min(3, newScale));
         applyTransform();
+        drawAllLines();
         updateZoomLabel();
     }
 
@@ -1866,17 +1938,18 @@ const DiagramRenderer = (() => {
             maxY = Math.max(maxY, y + h);
         });
 
-        const contentW = maxX - minX + 80;
-        const contentH = maxY - minY + 80;
+        const contentW = maxX - minX + 120;
+        const contentH = maxY - minY + 120;
         const scaleX = containerRect.width / contentW;
         const scaleY = containerRect.height / contentH;
         scale = Math.min(scaleX, scaleY, 1.5);
         scale = Math.max(0.2, Math.min(2, scale));
 
-        panX = (containerRect.width - contentW * scale) / 2 - minX * scale + 40;
-        panY = (containerRect.height - contentH * scale) / 2 - minY * scale + 40;
+        panX = (containerRect.width - contentW * scale) / 2 - minX * scale + 60;
+        panY = (containerRect.height - contentH * scale) / 2 - minY * scale + 60;
 
         applyTransform();
+        drawAllLines();
         updateZoomLabel();
     }
 
@@ -1889,69 +1962,123 @@ const DiagramRenderer = (() => {
     }
 
     // === SVG LINES ===
+    // SVG layer is OUTSIDE the canvas transform, so we need to convert
+    // canvas-local coordinates to screen-relative coordinates for the SVG
     function drawAllLines() {
         svgLayer.innerHTML = '';
 
-        // Need to use positions relative to canvas
+        if (relationships.length === 0) return;
+
         relationships.forEach(rel => {
             drawLine(rel);
         });
     }
 
     function drawLine(rel) {
-        const fromNode = document.getElementById(`table-${rel.fromTable}`);
-        const toNode = document.getElementById(`table-${rel.toTable}`);
+        const fromNode = getNodeElement(rel.fromTable);
+        const toNode = getNodeElement(rel.toTable);
         if (!fromNode || !toNode) return;
 
         // Find the specific column rows
-        const fromColRow = fromNode.querySelector(`[data-column="${rel.fromColumn}"]`);
-        const toColRow = toNode.querySelector(`[data-column="${rel.toColumn}"]`);
+        const fromColRow = fromNode.querySelector(`[data-column="${CSS.escape(rel.fromColumn)}"]`);
+        const toColRow = toNode.querySelector(`[data-column="${CSS.escape(rel.toColumn)}"]`);
 
-        // Get positions relative to canvas (before transform)
-        const fromPos = getColumnAnchor(fromNode, fromColRow, toNode);
-        const toPos = getColumnAnchor(toNode, toColRow, fromNode);
+        // Get anchor points using direct position calculation (canvas-local coordinates)
+        const fromPos = getAnchorPoint(fromNode, fromColRow, toNode);
+        const toPos = getAnchorPoint(toNode, toColRow, fromNode);
+
+        // Convert canvas-local coords to SVG container coords
+        const fromScreen = canvasToContainer(fromPos.x, fromPos.y);
+        const toScreen = canvasToContainer(toPos.x, toPos.y);
 
         // Determine color based on relationship
-        const color = rel.type === '1:1' ? '#22c55e' : '#4da6ff';
+        const color = rel.type === '1:1' ? '#22c55e' : rel.type === 'N:M' ? '#f0b429' : '#4da6ff';
 
         // Draw curved path
-        const path = createCurvedPath(fromPos, toPos, color);
+        const controlOffset = Math.max(50, Math.min(Math.abs(toScreen.x - fromScreen.x) * 0.4, 180));
+        const cp1x = fromPos.side === 'right' ? fromScreen.x + controlOffset : fromScreen.x - controlOffset;
+        const cp2x = toPos.side === 'right' ? toScreen.x + controlOffset : toScreen.x - controlOffset;
+
+        const d = `M ${fromScreen.x} ${fromScreen.y} C ${cp1x} ${fromScreen.y}, ${cp2x} ${toScreen.y}, ${toScreen.x} ${toScreen.y}`;
+
+        // Main visible path
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('class', 'rel-line');
+        path.setAttribute('stroke', color);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke-width', '2');
         svgLayer.appendChild(path);
 
-        // Draw invisible wider path for hover
-        const hoverPath = path.cloneNode();
+        // Wider invisible path for hover
+        const hoverPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        hoverPath.setAttribute('d', d);
         hoverPath.setAttribute('class', 'rel-line-hover');
         hoverPath.setAttribute('stroke', 'transparent');
-        hoverPath.setAttribute('stroke-width', '10');
+        hoverPath.setAttribute('stroke-width', '12');
+        hoverPath.setAttribute('fill', 'none');
         hoverPath.style.pointerEvents = 'stroke';
+        hoverPath.style.cursor = 'pointer';
         svgLayer.appendChild(hoverPath);
 
-        // Draw relationship type label
-        drawRelLabel(fromPos, toPos, rel.type, color);
+        // Relationship label at midpoint
+        const midX = (fromScreen.x + toScreen.x) / 2;
+        const midY = (fromScreen.y + toScreen.y) / 2;
 
-        // Draw cardinality markers
-        drawCardinalityMarkers(fromPos, toPos, rel.type, color);
+        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        const textWidth = rel.type.length * 8 + 10;
+        bg.setAttribute('x', midX - textWidth / 2);
+        bg.setAttribute('y', midY - 10);
+        bg.setAttribute('width', textWidth);
+        bg.setAttribute('height', 20);
+        bg.setAttribute('fill', '#1a1b2e');
+        bg.setAttribute('stroke', color);
+        bg.setAttribute('stroke-width', '1');
+        bg.setAttribute('rx', '4');
+        svgLayer.appendChild(bg);
+
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', midX);
+        text.setAttribute('y', midY + 4);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('class', 'rel-label');
+        text.setAttribute('fill', color);
+        text.setAttribute('font-size', '11');
+        text.textContent = rel.type;
+        svgLayer.appendChild(text);
+
+        // Cardinality markers near endpoints
+        const fLabel = rel.type === '1:1' ? '1' : (rel.type === 'N:M' ? 'N' : 'N');
+        const tLabel = rel.type === 'N:M' ? 'M' : '1';
+        drawMarker(fromScreen.x, fromScreen.y, fromPos.side, fLabel, color);
+        drawMarker(toScreen.x, toScreen.y, toPos.side, tLabel, color);
     }
 
-    function getColumnAnchor(node, colRow, otherNode) {
+    /**
+     * Get anchor point for a column row on a table node (in canvas-local coordinates)
+     */
+    function getAnchorPoint(node, colRow, otherNode) {
         const nodeX = parseFloat(node.style.left);
         const nodeY = parseFloat(node.style.top);
         const nodeW = node.offsetWidth;
         const nodeH = node.offsetHeight;
 
         const otherX = parseFloat(otherNode.style.left);
+        const otherW = otherNode.offsetWidth;
 
-        // Determine which side the line should exit from
-        const exitRight = nodeX + nodeW / 2 < otherX + otherNode.offsetWidth / 2;
+        // Decide which side the connector exits from
+        const nodeCenterX = nodeX + nodeW / 2;
+        const otherCenterX = otherX + otherW / 2;
+        const exitRight = nodeCenterX < otherCenterX;
 
         let y;
         if (colRow) {
-            // Position at the column row center
-            const rowRect = colRow.getBoundingClientRect();
-            const nodeRect = node.getBoundingClientRect();
-            const relativeY = (rowRect.top - nodeRect.top + rowRect.height / 2) / scale;
-            y = nodeY + relativeY;
+            // Calculate Y position of the column row relative to the node
+            const colOffsetTop = colRow.offsetTop;
+            const colHeight = colRow.offsetHeight;
+            y = nodeY + colOffsetTop + colHeight / 2;
         } else {
+            // Fallback: center of the node
             y = nodeY + nodeH / 2;
         }
 
@@ -1962,75 +2089,27 @@ const DiagramRenderer = (() => {
         };
     }
 
-    function createCurvedPath(from, to, color) {
-        const dx = Math.abs(to.x - from.x);
-        const controlOffset = Math.max(40, Math.min(dx * 0.4, 150));
-
-        const cp1x = from.side === 'right' ? from.x + controlOffset : from.x - controlOffset;
-        const cp2x = to.side === 'right' ? to.x + controlOffset : to.x - controlOffset;
-
-        const d = `M ${from.x} ${from.y} C ${cp1x} ${from.y}, ${cp2x} ${to.y}, ${to.x} ${to.y}`;
-
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', d);
-        path.setAttribute('class', 'rel-line');
-        path.setAttribute('stroke', color);
-        path.setAttribute('fill', 'none');
-        path.setAttribute('stroke-width', '2');
-        return path;
+    /**
+     * Convert canvas-local coordinates to container-relative coordinates
+     * (accounting for pan and scale transforms)
+     */
+    function canvasToContainer(cx, cy) {
+        return {
+            x: cx * scale + panX,
+            y: cy * scale + panY
+        };
     }
 
-    function drawRelLabel(from, to, type, color) {
-        const midX = (from.x + to.x) / 2;
-        const midY = (from.y + to.y) / 2;
-
-        // Background rect
-        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        const textWidth = type.length * 7 + 8;
-        bg.setAttribute('x', midX - textWidth / 2);
-        bg.setAttribute('y', midY - 9);
-        bg.setAttribute('width', textWidth);
-        bg.setAttribute('height', 18);
-        bg.setAttribute('class', 'rel-label-bg');
-        bg.setAttribute('fill', '#1a1b2e');
-        bg.setAttribute('stroke', color);
-        bg.setAttribute('stroke-width', '1');
-        bg.setAttribute('rx', '4');
-        svgLayer.appendChild(bg);
-
-        // Text
+    function drawMarker(x, y, side, label, color) {
+        const offset = side === 'right' ? 14 : -14;
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', midX);
-        text.setAttribute('y', midY + 4);
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('class', 'rel-label');
-        text.setAttribute('fill', color);
-        text.textContent = type;
-        svgLayer.appendChild(text);
-    }
-
-    function drawCardinalityMarkers(from, to, type, color) {
-        // Draw "1" at the "to" side (PK side) and "N" or "1" at the "from" side (FK side)
-        const markerOffset = 15;
-
-        // "From" side marker (FK side - many side)
-        const fromMarkerX = from.side === 'right' ? from.x + markerOffset : from.x - markerOffset;
-        drawSmallMarker(fromMarkerX, from.y - 12, type === '1:1' ? '1' : 'N', color);
-
-        // "To" side marker (PK side - one side)
-        const toMarkerX = to.side === 'right' ? to.x + markerOffset : to.x - markerOffset;
-        drawSmallMarker(toMarkerX, to.y - 12, '1', color);
-    }
-
-    function drawSmallMarker(x, y, label, color) {
-        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', x);
-        text.setAttribute('y', y);
+        text.setAttribute('x', x + offset);
+        text.setAttribute('y', y - 10);
         text.setAttribute('text-anchor', 'middle');
         text.setAttribute('font-size', '10');
         text.setAttribute('font-family', 'monospace');
         text.setAttribute('fill', color);
-        text.setAttribute('opacity', '0.7');
+        text.setAttribute('opacity', '0.8');
         text.textContent = label;
         svgLayer.appendChild(text);
     }
@@ -2040,23 +2119,20 @@ const DiagramRenderer = (() => {
      */
     function highlightTable(tableName) {
         canvas.querySelectorAll('.table-node').forEach(n => n.classList.remove('highlighted'));
-        const node = document.getElementById(`table-${tableName}`);
+        const node = getNodeElement(tableName);
         if (node) {
             node.classList.add('highlighted');
-            // Scroll into view
             const pos = positions[tableName];
             if (pos) {
                 const containerRect = container.getBoundingClientRect();
                 panX = containerRect.width / 2 - pos.x * scale;
                 panY = containerRect.height / 2 - pos.y * scale;
                 applyTransform();
+                drawAllLines();
             }
         }
     }
 
-    /**
-     * Redraw lines (call after relationship changes)
-     */
     function updateRelationships(rels) {
         relationships = rels;
         drawAllLines();
@@ -2064,6 +2140,10 @@ const DiagramRenderer = (() => {
 
     function getPositions() {
         return positions;
+    }
+
+    function resetPositions() {
+        positions = {};
     }
 
     function escapeHtml(str) {
@@ -2080,6 +2160,7 @@ const DiagramRenderer = (() => {
         drawAllLines,
         fitToScreen,
         getPositions,
+        resetPositions,
     };
 })();
 ===== END: js/diagramRenderer.js =====
@@ -2087,11 +2168,17 @@ const DiagramRenderer = (() => {
 /**
  * Relationship Detector Module
  * Auto-detects FK relationships between tables based on column naming conventions
+ * AND by scanning actual data values for matches
  */
 const RelationshipDetector = (() => {
 
+    let idCounter = 0;
+    function generateId() {
+        return 'rel_' + (++idCounter);
+    }
+
     /**
-     * Detect relationships between all tables
+     * Detect relationships using column name patterns
      * @param {Object[]} tables - Array of table objects from CsvParser
      * @returns {Object[]} relationships
      */
@@ -2099,18 +2186,164 @@ const RelationshipDetector = (() => {
         const relationships = [];
         const tableMap = buildTableMap(tables);
 
+        // First pass: mark PKs more aggressively
+        for (const table of tables) {
+            markPrimaryKeys(table);
+        }
+
+        // Second pass: find FK relationships by column name patterns
         for (const table of tables) {
             for (const col of table.columns) {
-                const found = findRelationship(table, col, tables, tableMap);
+                const found = findRelationshipByName(table, col, tables, tableMap);
                 if (found && !isDuplicate(relationships, found)) {
                     relationships.push(found);
-                    // Mark columns as FK
                     col.isFK = true;
                 }
             }
         }
 
         return relationships;
+    }
+
+    /**
+     * Deep scan: detect relationships by comparing actual data values across tables.
+     * This finds relationships that name-based heuristics miss.
+     * @param {Object[]} tables
+     * @param {Object[]} existingRels - already detected relationships to avoid duplicates
+     * @returns {Object[]} new relationships found
+     */
+    function deepScan(tables, existingRels) {
+        const newRels = [];
+        const allRels = [...existingRels];
+
+        for (const table of tables) {
+            markPrimaryKeys(table);
+        }
+
+        // For each table, for each column, try to match values against PK columns of other tables
+        for (const srcTable of tables) {
+            for (const srcCol of srcTable.columns) {
+                if (srcCol.isPK) continue; // Skip own PKs
+                if (srcCol.type === 'datetime' || srcCol.type === 'text' || srcCol.type === 'bit') continue;
+
+                // Get unique non-empty values from this column (sample)
+                const srcValues = getUniqueValues(srcTable.data, srcCol.name, 200);
+                if (srcValues.size === 0) continue;
+                // Skip if too many unique values relative to row count (likely not an FK)
+                // But allow it - user wants broad detection
+
+                for (const tgtTable of tables) {
+                    if (tgtTable.name === srcTable.name) continue;
+
+                    for (const tgtCol of tgtTable.columns) {
+                        // Check if this relationship already exists
+                        const testRel = {
+                            fromTable: srcTable.name,
+                            fromColumn: srcCol.name,
+                            toTable: tgtTable.name,
+                            toColumn: tgtCol.name
+                        };
+                        if (isDuplicate(allRels, testRel)) continue;
+
+                        // Get unique values from target column
+                        const tgtValues = getUniqueValues(tgtTable.data, tgtCol.name, 500);
+                        if (tgtValues.size === 0) continue;
+
+                        // Check if source values are a subset of target values
+                        const matchCount = countMatches(srcValues, tgtValues);
+                        const matchRatio = matchCount / srcValues.size;
+
+                        // High match ratio = likely FK relationship
+                        if (matchRatio >= 0.7 && srcValues.size >= 2 && matchCount >= 2) {
+                            // Prefer when target looks like a PK (fewer or equal unique values)
+                            // and source has repeated values (many rows, fewer unique = FK pattern)
+                            const srcUniqueRatio = srcValues.size / Math.max(srcTable.data.length, 1);
+                            const tgtUniqueRatio = tgtValues.size / Math.max(tgtTable.data.length, 1);
+
+                            // Target should have high uniqueness (like a PK) OR be marked as PK
+                            if (tgtCol.isPK || tgtUniqueRatio > 0.5 || tgtCol.name.toLowerCase().includes('id')) {
+                                const rel = {
+                                    id: generateId(),
+                                    fromTable: srcTable.name,
+                                    fromColumn: srcCol.name,
+                                    toTable: tgtTable.name,
+                                    toColumn: tgtCol.name,
+                                    type: srcUniqueRatio > 0.9 ? '1:1' : '1:N',
+                                    confidence: Math.round(matchRatio * 100),
+                                    method: 'data-scan'
+                                };
+                                newRels.push(rel);
+                                allRels.push(rel);
+                                srcCol.isFK = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return newRels;
+    }
+
+    function getUniqueValues(data, colName, maxSample) {
+        const values = new Set();
+        const limit = Math.min(data.length, maxSample);
+        for (let i = 0; i < limit; i++) {
+            const val = (data[i][colName] || '').toString().trim();
+            if (val && val !== '' && val !== 'NULL' && val !== 'null') {
+                values.add(val);
+            }
+        }
+        return values;
+    }
+
+    function countMatches(srcValues, tgtValues) {
+        let count = 0;
+        for (const v of srcValues) {
+            if (tgtValues.has(v)) count++;
+        }
+        return count;
+    }
+
+    /**
+     * Mark primary key columns more aggressively
+     */
+    function markPrimaryKeys(table) {
+        const tName = table.name.toLowerCase();
+
+        for (const col of table.columns) {
+            const cName = col.name.toLowerCase().trim();
+
+            // Exact "Id", "ID", "id"
+            if (cName === 'id') { col.isPK = true; continue; }
+
+            // {TableName}Id or {TableName}_Id or {TableName}ID
+            if (cName === tName + 'id' || cName === tName + '_id') { col.isPK = true; continue; }
+
+            // Singular version: "Orders" table -> "OrderId"
+            const singular = singularize(tName);
+            if (cName === singular + 'id' || cName === singular + '_id') { col.isPK = true; continue; }
+
+            // PK_ prefix
+            if (cName.startsWith('pk_') || cName.startsWith('pk ')) { col.isPK = true; continue; }
+
+            // Column named exactly the same as table + key
+            if (cName === tName + 'key' || cName === tName + '_key') { col.isPK = true; continue; }
+            if (cName === singular + 'key' || cName === singular + '_key') { col.isPK = true; continue; }
+
+            // Common patterns: "Code" as PK for lookup tables
+            if (cName === tName + 'code' || cName === tName + '_code') { col.isPK = true; continue; }
+            if (cName === singular + 'code' || cName === singular + '_code') { col.isPK = true; continue; }
+        }
+
+        // If no PK found, check if first column looks like an ID
+        if (!table.columns.some(c => c.isPK) && table.columns.length > 0) {
+            const first = table.columns[0];
+            const fn = first.name.toLowerCase();
+            if (fn.endsWith('id') || fn.endsWith('_id') || fn === 'id' || fn.endsWith('key') || fn.endsWith('code')) {
+                first.isPK = true;
+            }
+        }
     }
 
     /**
@@ -2121,113 +2354,167 @@ const RelationshipDetector = (() => {
         for (const t of tables) {
             const lower = t.name.toLowerCase();
             map[lower] = t;
-            // Also add singular/plural variants
-            if (lower.endsWith('s')) {
-                map[lower.slice(0, -1)] = t; // "orders" -> "order"
-            }
+
+            // Singular/plural variants
             if (lower.endsWith('ies')) {
-                map[lower.slice(0, -3) + 'y'] = t; // "categories" -> "category"
+                map[lower.slice(0, -3) + 'y'] = t;
+            } else if (lower.endsWith('ses') || lower.endsWith('xes') || lower.endsWith('zes') || lower.endsWith('ches') || lower.endsWith('shes')) {
+                map[lower.slice(0, -2)] = t;
+            } else if (lower.endsWith('s')) {
+                map[lower.slice(0, -1)] = t;
             }
-            if (lower.endsWith('es') && !lower.endsWith('ies')) {
-                map[lower.slice(0, -2)] = t; // "addresses" -> "address"
-            }
-            // Add plural if singular
+
             if (!lower.endsWith('s')) {
                 map[lower + 's'] = t;
+            }
+
+            // Also add without common prefixes like tbl, tbl_, t_
+            for (const prefix of ['tbl_', 'tbl', 't_', 'dim_', 'dim', 'fact_', 'fact', 'lkp_', 'lu_']) {
+                if (lower.startsWith(prefix)) {
+                    const stripped = lower.slice(prefix.length);
+                    map[stripped] = t;
+                    // Also singular/plural of stripped
+                    if (stripped.endsWith('s')) map[stripped.slice(0, -1)] = t;
+                    else map[stripped + 's'] = t;
+                }
             }
         }
         return map;
     }
 
-    /**
-     * Try to find a relationship for a given column
-     */
-    function findRelationship(sourceTable, col, allTables, tableMap) {
-        const colName = col.name;
+    function singularize(word) {
+        if (word.endsWith('ies')) return word.slice(0, -3) + 'y';
+        if (word.endsWith('ses') || word.endsWith('xes') || word.endsWith('zes')) return word.slice(0, -2);
+        if (word.endsWith('ches') || word.endsWith('shes')) return word.slice(0, -2);
+        if (word.endsWith('s') && !word.endsWith('ss')) return word.slice(0, -1);
+        return word;
+    }
 
-        // Skip if this is likely the table's own PK
+    /**
+     * Try to find a relationship for a given column based on its name
+     */
+    function findRelationshipByName(sourceTable, col, allTables, tableMap) {
+        const colName = col.name;
+        const colLower = colName.toLowerCase().trim();
+
+        // Skip if this is the table's own PK
         if (col.isPK) return null;
 
-        // Pattern 1: {TableName}Id or {TableName}_Id
-        let match = colName.match(/^(.+?)_?[Ii][Dd]$/);
+        // Pattern 1: {TableName}Id, {TableName}_Id, {TableName}ID
+        let match = colLower.match(/^(.+?)_?id$/);
         if (match) {
-            const candidate = match[1].toLowerCase();
-            // Don't match if candidate is the same table
+            const candidate = match[1];
             if (candidate === sourceTable.name.toLowerCase()) return null;
-            if (candidate === sourceTable.name.toLowerCase().replace(/s$/, '')) return null;
+            if (candidate === singularize(sourceTable.name.toLowerCase())) return null;
 
             const targetTable = tableMap[candidate];
             if (targetTable && targetTable.name !== sourceTable.name) {
                 const targetCol = findPKColumn(targetTable);
                 if (targetCol) {
-                    return {
-                        id: generateId(),
-                        fromTable: sourceTable.name,
-                        fromColumn: colName,
-                        toTable: targetTable.name,
-                        toColumn: targetCol.name,
-                        type: '1:N',
-                    };
+                    return makeRel(sourceTable.name, colName, targetTable.name, targetCol.name);
                 }
             }
         }
 
-        // Pattern 2: FK_{TableName} or fk_{TableName}
-        match = colName.match(/^[Ff][Kk]_(.+)/);
+        // Pattern 2: FK_{TableName}, fk_{TableName}, FK_{TableName}_Id
+        match = colLower.match(/^fk_(.+)/);
         if (match) {
-            const candidate = match[1].toLowerCase().replace(/_?id$/i, '');
+            const candidate = match[1].replace(/_?id$/i, '').replace(/_/g, '');
             const targetTable = tableMap[candidate];
             if (targetTable && targetTable.name !== sourceTable.name) {
                 const targetCol = findPKColumn(targetTable);
                 if (targetCol) {
-                    return {
-                        id: generateId(),
-                        fromTable: sourceTable.name,
-                        fromColumn: colName,
-                        toTable: targetTable.name,
-                        toColumn: targetCol.name,
-                        type: '1:N',
-                    };
+                    return makeRel(sourceTable.name, colName, targetTable.name, targetCol.name);
                 }
             }
         }
 
-        // Pattern 3: Exact column name match with another table's PK
+        // Pattern 3: {TableName}Key, {TableName}_Key
+        match = colLower.match(/^(.+?)_?key$/);
+        if (match) {
+            const candidate = match[1];
+            if (candidate === sourceTable.name.toLowerCase()) return null;
+            if (candidate === singularize(sourceTable.name.toLowerCase())) return null;
+
+            const targetTable = tableMap[candidate];
+            if (targetTable && targetTable.name !== sourceTable.name) {
+                const targetCol = findPKColumn(targetTable);
+                if (targetCol) {
+                    return makeRel(sourceTable.name, colName, targetTable.name, targetCol.name);
+                }
+            }
+        }
+
+        // Pattern 4: {TableName}Code, {TableName}_Code
+        match = colLower.match(/^(.+?)_?code$/);
+        if (match) {
+            const candidate = match[1];
+            if (candidate === sourceTable.name.toLowerCase()) return null;
+            const targetTable = tableMap[candidate];
+            if (targetTable && targetTable.name !== sourceTable.name) {
+                const targetCol = findPKColumn(targetTable);
+                if (targetCol) {
+                    return makeRel(sourceTable.name, colName, targetTable.name, targetCol.name);
+                }
+            }
+        }
+
+        // Pattern 5: {TableName}_Ref, {TableName}Ref
+        match = colLower.match(/^(.+?)_?ref$/);
+        if (match) {
+            const candidate = match[1];
+            const targetTable = tableMap[candidate];
+            if (targetTable && targetTable.name !== sourceTable.name) {
+                const targetCol = findPKColumn(targetTable);
+                if (targetCol) {
+                    return makeRel(sourceTable.name, colName, targetTable.name, targetCol.name);
+                }
+            }
+        }
+
+        // Pattern 6: Exact column name match with another table's PK
         for (const otherTable of allTables) {
             if (otherTable.name === sourceTable.name) continue;
             for (const otherCol of otherTable.columns) {
-                if (otherCol.isPK && otherCol.name === colName) {
-                    return {
-                        id: generateId(),
-                        fromTable: sourceTable.name,
-                        fromColumn: colName,
-                        toTable: otherTable.name,
-                        toColumn: otherCol.name,
-                        type: '1:N',
-                    };
+                if (otherCol.isPK && otherCol.name.toLowerCase() === colLower) {
+                    return makeRel(sourceTable.name, colName, otherTable.name, otherCol.name);
                 }
             }
         }
 
-        // Pattern 4: Column named {TableName}_{ColumnName} e.g., Order_Id -> Orders.Id
+        // Pattern 7: Column named {TableName}_{ColumnName} -> Table.Column
         match = colName.match(/^(.+?)_(.+)$/);
         if (match) {
             const tablePart = match[1].toLowerCase();
-            const colPart = match[2];
+            const colPart = match[2].toLowerCase();
             const targetTable = tableMap[tablePart];
             if (targetTable && targetTable.name !== sourceTable.name) {
                 const targetCol = targetTable.columns.find(c =>
-                    c.name.toLowerCase() === colPart.toLowerCase()
+                    c.name.toLowerCase() === colPart
                 );
                 if (targetCol) {
-                    return {
-                        id: generateId(),
-                        fromTable: sourceTable.name,
-                        fromColumn: colName,
-                        toTable: targetTable.name,
-                        toColumn: targetCol.name,
-                        type: '1:N',
-                    };
+                    return makeRel(sourceTable.name, colName, targetTable.name, targetCol.name);
+                }
+            }
+        }
+
+        // Pattern 8: Column name contains a table name (broader match)
+        for (const otherTable of allTables) {
+            if (otherTable.name === sourceTable.name) continue;
+            const otherLower = otherTable.name.toLowerCase();
+            const otherSingular = singularize(otherLower);
+
+            // Check if column starts with table name and ends with id/key/code/ref/num/no
+            if (colLower.startsWith(otherLower) || colLower.startsWith(otherSingular)) {
+                const suffix = colLower.startsWith(otherLower)
+                    ? colLower.slice(otherLower.length).replace(/^_/, '')
+                    : colLower.slice(otherSingular.length).replace(/^_/, '');
+
+                if (['id', 'key', 'code', 'ref', 'num', 'no', 'number', 'fk'].includes(suffix)) {
+                    const targetCol = findPKColumn(otherTable);
+                    if (targetCol) {
+                        return makeRel(sourceTable.name, colName, otherTable.name, targetCol.name);
+                    }
                 }
             }
         }
@@ -2235,30 +2522,50 @@ const RelationshipDetector = (() => {
         return null;
     }
 
+    function makeRel(fromTable, fromColumn, toTable, toColumn) {
+        return {
+            id: generateId(),
+            fromTable,
+            fromColumn,
+            toTable,
+            toColumn,
+            type: '1:N',
+            method: 'name-pattern'
+        };
+    }
+
     /**
      * Find the PK column of a table
      */
     function findPKColumn(table) {
-        // First check for marked PK
+        // Check for marked PK
         let pk = table.columns.find(c => c.isPK);
         if (pk) return pk;
 
         // Check for column named "Id"
-        pk = table.columns.find(c => /^[Ii][Dd]$/.test(c.name));
+        pk = table.columns.find(c => /^id$/i.test(c.name.trim()));
         if (pk) return pk;
 
-        // Check for {TableName}Id
-        const tableNameLower = table.name.toLowerCase();
-        pk = table.columns.find(c => c.name.toLowerCase() === tableNameLower + 'id');
+        // {TableName}Id
+        const tLower = table.name.toLowerCase();
+        pk = table.columns.find(c => c.name.toLowerCase() === tLower + 'id');
         if (pk) return pk;
 
-        // Check for {TableName}_Id
-        pk = table.columns.find(c => c.name.toLowerCase() === tableNameLower + '_id');
+        // {TableName}_Id
+        pk = table.columns.find(c => c.name.toLowerCase() === tLower + '_id');
         if (pk) return pk;
 
-        // Fallback: first column that has "id" in name
-        pk = table.columns.find(c => /id$/i.test(c.name));
-        return pk || null;
+        // Singular form
+        const singular = singularize(tLower);
+        pk = table.columns.find(c => c.name.toLowerCase() === singular + 'id' || c.name.toLowerCase() === singular + '_id');
+        if (pk) return pk;
+
+        // Any column ending in "id"
+        pk = table.columns.find(c => /id$/i.test(c.name.trim()));
+        if (pk) return pk;
+
+        // First column as fallback
+        return table.columns[0] || null;
     }
 
     /**
@@ -2273,13 +2580,8 @@ const RelationshipDetector = (() => {
         );
     }
 
-    let idCounter = 0;
-    function generateId() {
-        return 'rel_' + (++idCounter);
-    }
-
     /**
-     * Add a manual relationship
+     * Create a manual relationship
      */
     function createManual(fromTable, fromColumn, toTable, toColumn, type) {
         return {
@@ -2289,10 +2591,11 @@ const RelationshipDetector = (() => {
             toTable,
             toColumn,
             type: type || '1:N',
+            method: 'manual'
         };
     }
 
-    return { detect, createManual };
+    return { detect, deepScan, createManual };
 })();
 ===== END: js/relationshipDetector.js =====
 ===== FILE: lib/papaparse.min.js =====

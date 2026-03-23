@@ -104,6 +104,7 @@ const App = (() => {
         document.getElementById('btn-export-png').addEventListener('click', exportPNG);
         document.getElementById('btn-add-relationship').addEventListener('click', showAddRelModal);
         document.getElementById('btn-save-relationship').addEventListener('click', saveRelationship);
+        document.getElementById('btn-auto-detect').addEventListener('click', runAutoDetect);
 
         // Add more CSVs
         const addCsvInput = document.getElementById('add-csv-input');
@@ -275,6 +276,44 @@ const App = (() => {
         renderRelationshipList();
         DiagramRenderer.render(tables, relationships);
         document.getElementById('add-rel-modal').classList.remove('active');
+    }
+
+    // === Auto Detect (deep scan) ===
+    function runAutoDetect() {
+        const btn = document.getElementById('btn-auto-detect');
+        btn.textContent = 'Scanning...';
+        btn.disabled = true;
+
+        // Use setTimeout to let the UI update before the heavy computation
+        setTimeout(() => {
+            try {
+                const newRels = RelationshipDetector.deepScan(tables, relationships);
+                if (newRels.length > 0) {
+                    relationships = relationships.concat(newRels);
+
+                    renderRelationshipList();
+                    DiagramRenderer.render(tables, relationships);
+                    setTimeout(() => DiagramRenderer.fitToScreen(), 150);
+
+                    btn.textContent = `Found ${newRels.length} new!`;
+                    setTimeout(() => {
+                        btn.textContent = 'Auto Detect';
+                        btn.disabled = false;
+                    }, 2000);
+                } else {
+                    btn.textContent = 'No new found';
+                    setTimeout(() => {
+                        btn.textContent = 'Auto Detect';
+                        btn.disabled = false;
+                    }, 2000);
+                }
+            } catch (err) {
+                console.error('Auto detect error:', err);
+                btn.textContent = 'Auto Detect';
+                btn.disabled = false;
+                alert('Error during auto-detection: ' + err.message);
+            }
+        }, 50);
     }
 
     // === Export ===
