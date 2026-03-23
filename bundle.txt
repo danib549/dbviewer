@@ -1,0 +1,2306 @@
+===== FILE: index.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DB Viewer - Database Relationship Visualizer</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <!-- Upload Screen -->
+    <div id="upload-screen" class="screen active">
+        <div class="upload-container">
+            <h1>DB Relationship Visualizer</h1>
+            <p class="subtitle">Drop your SQL Server CSV exports to visualize table relationships</p>
+            <div id="drop-zone" class="drop-zone">
+                <div class="drop-zone-icon">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                </div>
+                <p class="drop-zone-text">Drag & drop CSV files here</p>
+                <p class="drop-zone-hint">or click to browse</p>
+                <input type="file" id="file-input" multiple accept=".csv" hidden>
+            </div>
+            <div id="file-list" class="file-list"></div>
+            <button id="btn-visualize" class="btn-primary" disabled>Visualize Relationships</button>
+        </div>
+    </div>
+
+    <!-- Diagram Screen -->
+    <div id="diagram-screen" class="screen">
+        <!-- Toolbar -->
+        <div class="toolbar">
+            <div class="toolbar-left">
+                <button id="btn-back" class="toolbar-btn" title="Back to upload">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                </button>
+                <h2 class="toolbar-title">DB Viewer</h2>
+                <span id="table-count" class="badge"></span>
+            </div>
+            <div class="toolbar-center">
+                <button id="btn-zoom-in" class="toolbar-btn" title="Zoom in">+</button>
+                <span id="zoom-level" class="zoom-label">100%</span>
+                <button id="btn-zoom-out" class="toolbar-btn" title="Zoom out">-</button>
+                <button id="btn-zoom-fit" class="toolbar-btn" title="Fit to screen">Fit</button>
+            </div>
+            <div class="toolbar-right">
+                <button id="btn-add-csv" class="toolbar-btn" title="Add more CSV files">+ Add CSV</button>
+                <button id="btn-export-sql" class="toolbar-btn" title="Export SQL DDL">Export SQL</button>
+                <button id="btn-export-png" class="toolbar-btn" title="Export as PNG">Export PNG</button>
+            </div>
+        </div>
+
+        <div class="main-layout">
+            <!-- Sidebar -->
+            <div id="sidebar" class="sidebar">
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Tables</h3>
+                    <ul id="table-list" class="table-list"></ul>
+                </div>
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Relationships <span id="rel-count" class="badge-sm"></span></h3>
+                    <ul id="relationship-list" class="relationship-list"></ul>
+                </div>
+                <div class="sidebar-section">
+                    <button id="btn-add-relationship" class="btn-secondary">+ Add Relationship</button>
+                </div>
+            </div>
+
+            <!-- Canvas -->
+            <div id="canvas-container" class="canvas-container">
+                <div id="canvas" class="canvas">
+                    <svg id="svg-lines" class="svg-overlay"></svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Preview Modal -->
+    <div id="data-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title"></h3>
+                <div class="modal-header-right">
+                    <input type="text" id="modal-search" class="modal-search" placeholder="Search data...">
+                    <button id="modal-close" class="modal-close">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div id="modal-stats" class="modal-stats"></div>
+                <div id="modal-table-wrap" class="modal-table-wrap">
+                    <table id="modal-table" class="data-table"></table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Relationship Modal -->
+    <div id="add-rel-modal" class="modal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3>Add Relationship</h3>
+                <button class="modal-close" onclick="document.getElementById('add-rel-modal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>From Table</label>
+                    <select id="rel-from-table" class="form-select"></select>
+                </div>
+                <div class="form-group">
+                    <label>From Column</label>
+                    <select id="rel-from-column" class="form-select"></select>
+                </div>
+                <div class="form-group">
+                    <label>To Table</label>
+                    <select id="rel-to-table" class="form-select"></select>
+                </div>
+                <div class="form-group">
+                    <label>To Column</label>
+                    <select id="rel-to-column" class="form-select"></select>
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="rel-type" class="form-select">
+                        <option value="1:N">One to Many (1:N)</option>
+                        <option value="1:1">One to One (1:1)</option>
+                        <option value="N:M">Many to Many (N:M)</option>
+                    </select>
+                </div>
+                <button id="btn-save-relationship" class="btn-primary" style="width:100%;margin-top:12px;">Add Relationship</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Additional file input for adding CSVs in diagram view -->
+    <input type="file" id="add-csv-input" multiple accept=".csv" hidden>
+
+    <script src="lib/papaparse.min.js"></script>
+    <script src="js/csvParser.js"></script>
+    <script src="js/relationshipDetector.js"></script>
+    <script src="js/diagramRenderer.js"></script>
+    <script src="js/dataPreview.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
+===== END: index.html =====
+===== FILE: css/styles.css =====
+/* === Reset & Base === */
+*, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg-primary: #1a1b2e;
+    --bg-secondary: #242640;
+    --bg-tertiary: #2d2f4e;
+    --bg-card: #2a2c48;
+    --bg-hover: #353760;
+    --text-primary: #e8e9f3;
+    --text-secondary: #a0a3bd;
+    --text-muted: #6b6f8d;
+    --accent: #6c63ff;
+    --accent-hover: #5a52e0;
+    --accent-light: rgba(108, 99, 255, 0.15);
+    --pk-color: #f0b429;
+    --pk-bg: rgba(240, 180, 41, 0.12);
+    --fk-color: #4da6ff;
+    --fk-bg: rgba(77, 166, 255, 0.12);
+    --border-color: #3a3c5e;
+    --border-light: #4a4c6e;
+    --danger: #ef4444;
+    --success: #22c55e;
+    --shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.4);
+    --radius: 8px;
+    --radius-lg: 12px;
+    --transition: 0.2s ease;
+    --sidebar-width: 280px;
+    --toolbar-height: 48px;
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+body {
+    font-family: var(--font);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* === Screens === */
+.screen {
+    display: none;
+    height: 100vh;
+}
+.screen.active {
+    display: flex;
+}
+
+/* === Upload Screen === */
+#upload-screen {
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--bg-primary) 0%, #1e1f3a 100%);
+}
+
+.upload-container {
+    text-align: center;
+    max-width: 560px;
+    width: 100%;
+    padding: 20px;
+}
+
+.upload-container h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.subtitle {
+    color: var(--text-secondary);
+    margin-bottom: 32px;
+    font-size: 1rem;
+}
+
+/* Drop Zone */
+.drop-zone {
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 48px 24px;
+    cursor: pointer;
+    transition: all var(--transition);
+    background: var(--bg-secondary);
+}
+.drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: var(--accent-light);
+}
+.drop-zone-icon {
+    color: var(--text-muted);
+    margin-bottom: 16px;
+}
+.drop-zone.drag-over .drop-zone-icon {
+    color: var(--accent);
+}
+.drop-zone-text {
+    font-size: 1.1rem;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+.drop-zone-hint {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+/* File List */
+.file-list {
+    margin-top: 20px;
+    max-height: 200px;
+    overflow-y: auto;
+    text-align: left;
+}
+.file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius);
+    margin-bottom: 6px;
+    font-size: 0.9rem;
+}
+.file-item-name {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}
+.file-item-size {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+.file-item-remove {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1.1rem;
+    padding: 0 4px;
+    transition: color var(--transition);
+}
+.file-item-remove:hover {
+    color: var(--danger);
+}
+
+/* Buttons */
+.btn-primary {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 12px 32px;
+    border-radius: var(--radius);
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 24px;
+    transition: all var(--transition);
+}
+.btn-primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(108, 99, 255, 0.4);
+}
+.btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    cursor: pointer;
+    width: 100%;
+    transition: all var(--transition);
+}
+.btn-secondary:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* === Toolbar === */
+.toolbar {
+    height: var(--toolbar-height);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    flex-shrink: 0;
+}
+.toolbar-left, .toolbar-center, .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.toolbar-title {
+    font-size: 1rem;
+    font-weight: 600;
+}
+.toolbar-btn {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    font-size: 0.8rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all var(--transition);
+    white-space: nowrap;
+}
+.toolbar-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+.badge {
+    background: var(--accent);
+    color: white;
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+}
+.badge-sm {
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    padding: 1px 6px;
+    border-radius: 8px;
+}
+.zoom-label {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    min-width: 40px;
+    text-align: center;
+}
+
+/* === Main Layout === */
+.main-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+#diagram-screen {
+    flex-direction: column;
+}
+
+/* === Sidebar === */
+.sidebar {
+    width: var(--sidebar-width);
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border-color);
+    overflow-y: auto;
+    flex-shrink: 0;
+    padding: 12px;
+}
+.sidebar-section {
+    margin-bottom: 20px;
+}
+.sidebar-heading {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Table List */
+.table-list {
+    list-style: none;
+}
+.table-list-item {
+    padding: 6px 10px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-family: var(--font-mono);
+    transition: background var(--transition);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.table-list-item:hover {
+    background: var(--bg-hover);
+}
+.table-list-item.active {
+    background: var(--accent-light);
+    color: var(--accent);
+}
+.table-list-item .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.table-list-item .col-count {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+/* Relationship List */
+.relationship-list {
+    list-style: none;
+}
+.rel-item {
+    padding: 6px 10px;
+    border-radius: var(--radius);
+    font-size: 0.78rem;
+    margin-bottom: 4px;
+    background: var(--bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+.rel-item-text {
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.rel-item-text .rel-table {
+    color: var(--text-primary);
+}
+.rel-item-text .rel-col {
+    color: var(--fk-color);
+}
+.rel-item-type {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    flex-shrink: 0;
+}
+.rel-item-delete {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.85rem;
+    padding: 0 2px;
+    flex-shrink: 0;
+    transition: color var(--transition);
+}
+.rel-item-delete:hover {
+    color: var(--danger);
+}
+
+/* === Canvas === */
+.canvas-container {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    background:
+        radial-gradient(circle at 1px 1px, var(--border-color) 1px, transparent 0);
+    background-size: 24px 24px;
+    cursor: grab;
+}
+.canvas-container.grabbing {
+    cursor: grabbing;
+}
+.canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    transform-origin: 0 0;
+}
+
+/* SVG Overlay */
+.svg-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+}
+.svg-overlay line, .svg-overlay path {
+    pointer-events: none;
+}
+
+/* === Table Nodes === */
+.table-node {
+    position: absolute;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    min-width: 200px;
+    max-width: 300px;
+    box-shadow: var(--shadow);
+    user-select: none;
+    transition: box-shadow var(--transition), border-color var(--transition);
+    z-index: 1;
+}
+.table-node:hover {
+    border-color: var(--border-light);
+    box-shadow: var(--shadow-lg);
+    z-index: 2;
+}
+.table-node.highlighted {
+    border-color: var(--accent);
+    box-shadow: 0 0 20px rgba(108, 99, 255, 0.3);
+    z-index: 3;
+}
+.table-node-header {
+    padding: 8px 12px;
+    border-radius: var(--radius) var(--radius) 0 0;
+    cursor: move;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+.table-node-header .table-icon {
+    margin-right: 6px;
+    opacity: 0.7;
+}
+.table-node-header .table-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.table-node-header .table-row-count {
+    font-size: 0.7rem;
+    opacity: 0.6;
+    font-weight: 400;
+    margin-left: 8px;
+}
+.table-node-columns {
+    padding: 4px 0;
+    max-height: 300px;
+    overflow-y: auto;
+}
+.table-col-row {
+    display: flex;
+    align-items: center;
+    padding: 3px 12px;
+    font-size: 0.8rem;
+    gap: 8px;
+    transition: background var(--transition);
+    cursor: pointer;
+}
+.table-col-row:hover {
+    background: var(--bg-hover);
+}
+.table-col-row.pk-row {
+    background: var(--pk-bg);
+}
+.table-col-row.fk-row {
+    background: var(--fk-bg);
+}
+.col-icon {
+    width: 18px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-align: center;
+    flex-shrink: 0;
+    border-radius: 3px;
+    padding: 1px 0;
+}
+.col-icon.pk {
+    color: var(--pk-color);
+    background: rgba(240, 180, 41, 0.2);
+}
+.col-icon.fk {
+    color: var(--fk-color);
+    background: rgba(77, 166, 255, 0.2);
+}
+.col-name {
+    flex: 1;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.col-type {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+}
+
+/* Table colors (assigned dynamically) */
+.table-color-0 .table-node-header { background: #6c63ff22; border-bottom: 2px solid #6c63ff; }
+.table-color-1 .table-node-header { background: #f0b42922; border-bottom: 2px solid #f0b429; }
+.table-color-2 .table-node-header { background: #22c55e22; border-bottom: 2px solid #22c55e; }
+.table-color-3 .table-node-header { background: #ef444422; border-bottom: 2px solid #ef4444; }
+.table-color-4 .table-node-header { background: #4da6ff22; border-bottom: 2px solid #4da6ff; }
+.table-color-5 .table-node-header { background: #a78bfa22; border-bottom: 2px solid #a78bfa; }
+.table-color-6 .table-node-header { background: #f472b622; border-bottom: 2px solid #f472b6; }
+.table-color-7 .table-node-header { background: #fb923c22; border-bottom: 2px solid #fb923c; }
+.table-color-8 .table-node-header { background: #38bdf822; border-bottom: 2px solid #38bdf8; }
+.table-color-9 .table-node-header { background: #34d39922; border-bottom: 2px solid #34d399; }
+.table-color-10 .table-node-header { background: #e879f922; border-bottom: 2px solid #e879f9; }
+.table-color-11 .table-node-header { background: #fbbf2422; border-bottom: 2px solid #fbbf24; }
+.table-color-12 .table-node-header { background: #f8717122; border-bottom: 2px solid #f87171; }
+.table-color-13 .table-node-header { background: #60a5fa22; border-bottom: 2px solid #60a5fa; }
+.table-color-14 .table-node-header { background: #a3e63522; border-bottom: 2px solid #a3e635; }
+.table-color-15 .table-node-header { background: #c084fc22; border-bottom: 2px solid #c084fc; }
+.table-color-16 .table-node-header { background: #fb7c8622; border-bottom: 2px solid #fb7c86; }
+.table-color-17 .table-node-header { background: #2dd4bf22; border-bottom: 2px solid #2dd4bf; }
+
+/* === Modal === */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+.modal.active {
+    display: flex;
+}
+.modal-content {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    width: 90%;
+    max-width: 900px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--shadow-lg);
+}
+.modal-sm {
+    max-width: 420px;
+}
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+.modal-header h3 {
+    font-size: 1rem;
+    font-weight: 600;
+}
+.modal-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+    transition: color var(--transition);
+}
+.modal-close:hover {
+    color: var(--text-primary);
+}
+.modal-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+    flex: 1;
+}
+.modal-search {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    outline: none;
+    width: 200px;
+    transition: border-color var(--transition);
+}
+.modal-search:focus {
+    border-color: var(--accent);
+}
+.modal-stats {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 12px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.modal-stats span {
+    background: var(--bg-tertiary);
+    padding: 4px 10px;
+    border-radius: var(--radius);
+}
+
+/* Data Table */
+.modal-table-wrap {
+    overflow: auto;
+    max-height: 55vh;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+}
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+.data-table th {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    border-bottom: 2px solid var(--border-color);
+    white-space: nowrap;
+}
+.data-table td {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border-color);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    white-space: nowrap;
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.data-table tr:hover td {
+    background: var(--bg-hover);
+}
+.data-table th.pk-col {
+    color: var(--pk-color);
+}
+.data-table th.fk-col {
+    color: var(--fk-color);
+}
+
+/* Form elements */
+.form-group {
+    margin-bottom: 12px;
+}
+.form-group label {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+.form-select {
+    width: 100%;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    outline: none;
+    cursor: pointer;
+}
+.form-select:focus {
+    border-color: var(--accent);
+}
+
+/* SVG relationship lines */
+.rel-line {
+    stroke-width: 2;
+    fill: none;
+}
+.rel-line-hover {
+    stroke-width: 8;
+    stroke: transparent;
+    fill: none;
+    cursor: pointer;
+    pointer-events: stroke;
+}
+.rel-label {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    fill: var(--text-muted);
+    pointer-events: none;
+}
+.rel-label-bg {
+    fill: var(--bg-primary);
+    rx: 3;
+    ry: 3;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--border-light);
+}
+
+/* === Responsive === */
+@media (max-width: 768px) {
+    .sidebar {
+        width: 200px;
+    }
+    .toolbar-right .toolbar-btn span {
+        display: none;
+    }
+}
+===== END: css/styles.css =====
+===== FILE: js/app.js =====
+/**
+ * Main Application Module
+ * Wires together all modules and handles UI state
+ */
+const App = (() => {
+
+    let tables = [];
+    let relationships = [];
+    let selectedFiles = [];
+
+    function init() {
+        setupUploadScreen();
+        setupDiagramScreen();
+        DataPreview.init();
+    }
+
+    // === Upload Screen ===
+    function setupUploadScreen() {
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const btnVisualize = document.getElementById('btn-visualize');
+
+        // Click to browse
+        dropZone.addEventListener('click', () => fileInput.click());
+
+        // File input change
+        fileInput.addEventListener('change', (e) => {
+            addFiles(e.target.files);
+            fileInput.value = '';
+        });
+
+        // Drag & drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            const files = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.csv'));
+            if (files.length > 0) {
+                addFiles(files);
+            }
+        });
+
+        // Visualize button
+        btnVisualize.addEventListener('click', startVisualization);
+    }
+
+    function addFiles(fileList) {
+        const newFiles = Array.from(fileList).filter(f => {
+            if (!f.name.toLowerCase().endsWith('.csv')) return false;
+            return !selectedFiles.some(sf => sf.name === f.name);
+        });
+
+        selectedFiles = selectedFiles.concat(newFiles);
+        renderFileList();
+    }
+
+    function removeFile(index) {
+        selectedFiles.splice(index, 1);
+        renderFileList();
+    }
+
+    function renderFileList() {
+        const container = document.getElementById('file-list');
+        const btn = document.getElementById('btn-visualize');
+
+        container.innerHTML = selectedFiles.map((f, i) => `
+            <div class="file-item">
+                <span class="file-item-name">${escapeHtml(f.name)}</span>
+                <span class="file-item-size">${formatSize(f.size)}</span>
+                <button class="file-item-remove" onclick="App.removeFile(${i})" title="Remove">&times;</button>
+            </div>
+        `).join('');
+
+        btn.disabled = selectedFiles.length === 0;
+    }
+
+    async function startVisualization() {
+        const btn = document.getElementById('btn-visualize');
+        btn.disabled = true;
+        btn.textContent = 'Parsing...';
+
+        try {
+            tables = await CsvParser.parseFiles(selectedFiles);
+            relationships = RelationshipDetector.detect(tables);
+
+            showDiagramScreen();
+        } catch (err) {
+            alert('Error parsing CSV files: ' + err.message);
+            btn.disabled = false;
+            btn.textContent = 'Visualize Relationships';
+        }
+    }
+
+    // === Diagram Screen ===
+    function setupDiagramScreen() {
+        document.getElementById('btn-back').addEventListener('click', showUploadScreen);
+        document.getElementById('btn-export-sql').addEventListener('click', exportSQL);
+        document.getElementById('btn-export-png').addEventListener('click', exportPNG);
+        document.getElementById('btn-add-relationship').addEventListener('click', showAddRelModal);
+        document.getElementById('btn-save-relationship').addEventListener('click', saveRelationship);
+
+        // Add more CSVs
+        const addCsvInput = document.getElementById('add-csv-input');
+        document.getElementById('btn-add-csv').addEventListener('click', () => addCsvInput.click());
+        addCsvInput.addEventListener('change', async (e) => {
+            const newFiles = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.csv'));
+            if (newFiles.length === 0) return;
+            try {
+                const newTables = await CsvParser.parseFiles(newFiles);
+                tables = tables.concat(newTables);
+                relationships = RelationshipDetector.detect(tables);
+                showDiagramScreen();
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+            addCsvInput.value = '';
+        });
+
+        DiagramRenderer.init((table) => {
+            DataPreview.show(table);
+        });
+    }
+
+    function showDiagramScreen() {
+        document.getElementById('upload-screen').classList.remove('active');
+        document.getElementById('diagram-screen').classList.add('active');
+
+        // Update counters
+        document.getElementById('table-count').textContent = tables.length + ' tables';
+        document.getElementById('rel-count').textContent = relationships.length;
+
+        // Render sidebar
+        renderTableList();
+        renderRelationshipList();
+
+        // Render diagram
+        DiagramRenderer.render(tables, relationships);
+
+        // Fit to screen after a short delay for DOM rendering
+        setTimeout(() => DiagramRenderer.fitToScreen(), 100);
+    }
+
+    function showUploadScreen() {
+        document.getElementById('diagram-screen').classList.remove('active');
+        document.getElementById('upload-screen').classList.add('active');
+        document.getElementById('btn-visualize').disabled = false;
+        document.getElementById('btn-visualize').textContent = 'Visualize Relationships';
+    }
+
+    function renderTableList() {
+        const list = document.getElementById('table-list');
+        list.innerHTML = tables.map((t, i) => {
+            const colorIndex = i % 18;
+            const colors = [
+                '#6c63ff', '#f0b429', '#22c55e', '#ef4444', '#4da6ff',
+                '#a78bfa', '#f472b6', '#fb923c', '#38bdf8', '#34d399',
+                '#e879f9', '#fbbf24', '#f87171', '#60a5fa', '#a3e635',
+                '#c084fc', '#fb7c86', '#2dd4bf'
+            ];
+            return `
+                <li class="table-list-item" onclick="App.onTableListClick('${escapeAttr(t.name)}')">
+                    <span class="dot" style="background:${colors[colorIndex]}"></span>
+                    ${escapeHtml(t.name)}
+                    <span class="col-count">${t.columns.length} cols</span>
+                </li>
+            `;
+        }).join('');
+    }
+
+    function renderRelationshipList() {
+        const list = document.getElementById('relationship-list');
+        if (relationships.length === 0) {
+            list.innerHTML = '<li style="padding:8px;color:var(--text-muted);font-size:0.8rem;">No relationships detected</li>';
+            return;
+        }
+
+        list.innerHTML = relationships.map(r => `
+            <li class="rel-item">
+                <span class="rel-item-text">
+                    <span class="rel-table">${escapeHtml(r.fromTable)}</span>.<span class="rel-col">${escapeHtml(r.fromColumn)}</span>
+                    &rarr;
+                    <span class="rel-table">${escapeHtml(r.toTable)}</span>.<span class="rel-col">${escapeHtml(r.toColumn)}</span>
+                </span>
+                <span class="rel-item-type">${r.type}</span>
+                <button class="rel-item-delete" onclick="App.deleteRelationship('${r.id}')" title="Remove">&times;</button>
+            </li>
+        `).join('');
+
+        document.getElementById('rel-count').textContent = relationships.length;
+    }
+
+    // === Table list click ===
+    function onTableListClick(tableName) {
+        document.querySelectorAll('.table-list-item').forEach(el => el.classList.remove('active'));
+        event.currentTarget.classList.add('active');
+        DiagramRenderer.highlightTable(tableName);
+    }
+
+    // === Relationship management ===
+    function deleteRelationship(id) {
+        relationships = relationships.filter(r => r.id !== id);
+
+        // Update FK flags on columns
+        tables.forEach(t => {
+            t.columns.forEach(c => {
+                c.isFK = relationships.some(r =>
+                    (r.fromTable === t.name && r.fromColumn === c.name)
+                );
+            });
+        });
+
+        renderRelationshipList();
+        DiagramRenderer.render(tables, relationships);
+    }
+
+    function showAddRelModal() {
+        const modal = document.getElementById('add-rel-modal');
+        const fromTableSel = document.getElementById('rel-from-table');
+        const toTableSel = document.getElementById('rel-to-table');
+
+        // Populate table dropdowns
+        const options = tables.map(t => `<option value="${escapeAttr(t.name)}">${escapeHtml(t.name)}</option>`).join('');
+        fromTableSel.innerHTML = options;
+        toTableSel.innerHTML = options;
+
+        // Populate column dropdowns for first tables
+        updateColumnDropdown('rel-from-table', 'rel-from-column');
+        updateColumnDropdown('rel-to-table', 'rel-to-column');
+
+        fromTableSel.onchange = () => updateColumnDropdown('rel-from-table', 'rel-from-column');
+        toTableSel.onchange = () => updateColumnDropdown('rel-to-table', 'rel-to-column');
+
+        modal.classList.add('active');
+    }
+
+    function updateColumnDropdown(tableSelectId, colSelectId) {
+        const tableName = document.getElementById(tableSelectId).value;
+        const colSelect = document.getElementById(colSelectId);
+        const table = tables.find(t => t.name === tableName);
+        if (!table) return;
+
+        colSelect.innerHTML = table.columns.map(c =>
+            `<option value="${escapeAttr(c.name)}">${escapeHtml(c.name)} (${c.type})</option>`
+        ).join('');
+    }
+
+    function saveRelationship() {
+        const fromTable = document.getElementById('rel-from-table').value;
+        const fromColumn = document.getElementById('rel-from-column').value;
+        const toTable = document.getElementById('rel-to-table').value;
+        const toColumn = document.getElementById('rel-to-column').value;
+        const type = document.getElementById('rel-type').value;
+
+        if (fromTable === toTable && fromColumn === toColumn) {
+            alert('Cannot create a self-referencing relationship on the same column.');
+            return;
+        }
+
+        const rel = RelationshipDetector.createManual(fromTable, fromColumn, toTable, toColumn, type);
+        relationships.push(rel);
+
+        // Mark FK
+        const table = tables.find(t => t.name === fromTable);
+        if (table) {
+            const col = table.columns.find(c => c.name === fromColumn);
+            if (col) col.isFK = true;
+        }
+
+        renderRelationshipList();
+        DiagramRenderer.render(tables, relationships);
+        document.getElementById('add-rel-modal').classList.remove('active');
+    }
+
+    // === Export ===
+    function exportSQL() {
+        let sql = '-- Generated by DB Relationship Visualizer\n';
+        sql += '-- ' + new Date().toISOString() + '\n\n';
+
+        tables.forEach(table => {
+            sql += `CREATE TABLE [${table.name}] (\n`;
+            const colDefs = table.columns.map(col => {
+                let sqlType = mapToSqlType(col.type);
+                let line = `    [${col.name}] ${sqlType}`;
+                if (col.isPK) line += ' PRIMARY KEY';
+                return line;
+            });
+            sql += colDefs.join(',\n');
+            sql += '\n);\n\n';
+        });
+
+        // Foreign keys
+        relationships.forEach(rel => {
+            sql += `ALTER TABLE [${rel.fromTable}]\n`;
+            sql += `    ADD CONSTRAINT [FK_${rel.fromTable}_${rel.toTable}]\n`;
+            sql += `    FOREIGN KEY ([${rel.fromColumn}])\n`;
+            sql += `    REFERENCES [${rel.toTable}] ([${rel.toColumn}]);\n\n`;
+        });
+
+        downloadFile('schema.sql', sql, 'text/sql');
+    }
+
+    function mapToSqlType(type) {
+        const map = {
+            'int': 'INT',
+            'decimal': 'DECIMAL(18,2)',
+            'bit': 'BIT',
+            'datetime': 'DATETIME',
+            'text': 'NVARCHAR(MAX)',
+            'varchar': 'NVARCHAR(255)',
+        };
+        return map[type] || 'NVARCHAR(255)';
+    }
+
+    function exportPNG() {
+        const canvas = document.getElementById('canvas');
+        const svgLayer = document.getElementById('svg-lines');
+
+        // Use a simple approach: capture via an offscreen canvas
+        // For a proper implementation, we would use html2canvas
+        // For now, export the SVG + basic info
+        alert('PNG export requires opening the page in a browser. You can use the browser\'s screenshot tool (Ctrl+Shift+S in Firefox, or use browser devtools) to capture the diagram.');
+    }
+
+    // === Utilities ===
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    function escapeAttr(str) {
+        return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
+
+    function downloadFile(filename, content, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // Expose public methods
+    return {
+        init,
+        removeFile,
+        onTableListClick,
+        deleteRelationship,
+    };
+})();
+
+// Start app
+document.addEventListener('DOMContentLoaded', App.init);
+===== END: js/app.js =====
+===== FILE: js/csvParser.js =====
+/**
+ * CSV Parser Module
+ * Parses CSV files and extracts table metadata (columns, types, PK candidates)
+ */
+const CsvParser = (() => {
+
+    /**
+     * Parse a single CSV file and return a table object
+     * @param {File} file
+     * @returns {Promise<Object>} table object
+     */
+    function parseFile(file) {
+        return new Promise((resolve, reject) => {
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                dynamicTyping: false,
+                complete: (results) => {
+                    const tableName = extractTableName(file.name);
+                    const columns = analyzeColumns(results.meta.fields || [], results.data);
+                    resolve({
+                        name: tableName,
+                        fileName: file.name,
+                        columns: columns,
+                        data: results.data,
+                        rowCount: results.data.length,
+                    });
+                },
+                error: (err) => {
+                    reject(new Error(`Failed to parse ${file.name}: ${err.message}`));
+                }
+            });
+        });
+    }
+
+    /**
+     * Parse multiple CSV files
+     * @param {FileList|File[]} files
+     * @returns {Promise<Object[]>} array of table objects
+     */
+    async function parseFiles(files) {
+        const promises = Array.from(files).map(f => parseFile(f));
+        return Promise.all(promises);
+    }
+
+    /**
+     * Extract table name from filename
+     * Handles: TableName.csv, dbo.TableName.csv, schema.TableName.csv
+     */
+    function extractTableName(fileName) {
+        let name = fileName.replace(/\.csv$/i, '');
+        // Remove schema prefix if present (e.g., "dbo.Orders" -> "Orders")
+        const parts = name.split('.');
+        if (parts.length > 1) {
+            name = parts[parts.length - 1];
+        }
+        // Remove common prefixes
+        name = name.replace(/^tbl_?/i, '');
+        return name;
+    }
+
+    /**
+     * Analyze columns: detect types and PK candidates
+     */
+    function analyzeColumns(fields, data) {
+        return fields.map(field => {
+            const type = detectType(field, data);
+            const isPK = isPrimaryKeyCandidate(field);
+            return {
+                name: field,
+                type: type,
+                isPK: isPK,
+                isFK: false, // Will be set by RelationshipDetector
+            };
+        });
+    }
+
+    /**
+     * Detect column data type by sampling values
+     */
+    function detectType(columnName, data) {
+        const sampleSize = Math.min(data.length, 100);
+        let intCount = 0, floatCount = 0, boolCount = 0, dateCount = 0, emptyCount = 0;
+        const total = sampleSize;
+
+        for (let i = 0; i < sampleSize; i++) {
+            const val = (data[i][columnName] || '').toString().trim();
+
+            if (val === '' || val === 'NULL' || val === 'null') {
+                emptyCount++;
+                continue;
+            }
+
+            if (val === '0' || val === '1' || val.toLowerCase() === 'true' || val.toLowerCase() === 'false') {
+                boolCount++;
+            }
+
+            if (/^-?\d+$/.test(val)) {
+                intCount++;
+            } else if (/^-?\d+\.\d+$/.test(val)) {
+                floatCount++;
+            }
+
+            if (/^\d{4}[-/]\d{2}[-/]\d{2}/.test(val) || /^\d{2}[-/]\d{2}[-/]\d{4}/.test(val)) {
+                dateCount++;
+            }
+        }
+
+        const nonEmpty = total - emptyCount;
+        if (nonEmpty === 0) return 'varchar';
+
+        const threshold = 0.8;
+
+        if (dateCount / nonEmpty >= threshold) return 'datetime';
+        if (boolCount / nonEmpty >= threshold && intCount / nonEmpty >= threshold) {
+            // Could be bit or int - check if only 0/1
+            const allBinary = data.slice(0, sampleSize).every(row => {
+                const v = (row[columnName] || '').toString().trim();
+                return v === '' || v === '0' || v === '1' || v.toLowerCase() === 'true' || v.toLowerCase() === 'false' || v === 'NULL';
+            });
+            if (allBinary) return 'bit';
+        }
+        if (intCount / nonEmpty >= threshold) return 'int';
+        if ((intCount + floatCount) / nonEmpty >= threshold) return 'decimal';
+
+        // Check max length for varchar vs nvarchar hint
+        let maxLen = 0;
+        for (let i = 0; i < sampleSize; i++) {
+            const len = (data[i][columnName] || '').length;
+            if (len > maxLen) maxLen = len;
+        }
+
+        if (maxLen > 255) return 'text';
+        return 'varchar';
+    }
+
+    /**
+     * Check if column name suggests it's a primary key
+     */
+    function isPrimaryKeyCandidate(columnName) {
+        const name = columnName.trim();
+        // Exact match "Id" or "ID"
+        if (/^[Ii][Dd]$/.test(name)) return true;
+        // Ends with _ID or _Id (but not things like CustomerId which are FKs)
+        // Only consider it PK if it's just "Id" by itself
+        if (/^PK_/i.test(name)) return true;
+        // {TableName}Id pattern is more likely FK, not PK
+        // So we only mark simple "Id" as PK candidate
+        return false;
+    }
+
+    return { parseFile, parseFiles, extractTableName };
+})();
+===== END: js/csvParser.js =====
+===== FILE: js/dataPreview.js =====
+/**
+ * Data Preview Module
+ * Shows table data in a modal with search/filter
+ */
+const DataPreview = (() => {
+
+    const modal = () => document.getElementById('data-modal');
+    const title = () => document.getElementById('modal-title');
+    const stats = () => document.getElementById('modal-stats');
+    const tableWrap = () => document.getElementById('modal-table');
+    const searchInput = () => document.getElementById('modal-search');
+    const closeBtn = () => document.getElementById('modal-close');
+
+    let currentTable = null;
+    let filteredData = [];
+
+    function init() {
+        closeBtn().addEventListener('click', close);
+        searchInput().addEventListener('input', onSearch);
+        modal().addEventListener('click', (e) => {
+            if (e.target === modal()) close();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modal().classList.contains('active')) {
+                close();
+            }
+        });
+    }
+
+    /**
+     * Show data preview for a table
+     * @param {Object} table - table object from CsvParser
+     */
+    function show(table) {
+        currentTable = table;
+        filteredData = table.data;
+        searchInput().value = '';
+        title().textContent = table.name;
+
+        renderStats(table);
+        renderTable(table.columns, table.data);
+        modal().classList.add('active');
+    }
+
+    function close() {
+        modal().classList.remove('active');
+        currentTable = null;
+    }
+
+    function onSearch(e) {
+        const query = e.target.value.toLowerCase().trim();
+        if (!currentTable) return;
+
+        if (!query) {
+            filteredData = currentTable.data;
+        } else {
+            filteredData = currentTable.data.filter(row => {
+                return Object.values(row).some(val =>
+                    (val || '').toString().toLowerCase().includes(query)
+                );
+            });
+        }
+
+        renderTable(currentTable.columns, filteredData);
+        renderStats(currentTable, filteredData.length);
+    }
+
+    function renderStats(table, shownCount) {
+        const count = shownCount !== undefined ? shownCount : table.data.length;
+        stats().innerHTML = `
+            <span>Columns: ${table.columns.length}</span>
+            <span>Rows: ${count}${shownCount !== undefined && shownCount !== table.data.length ? ' / ' + table.data.length : ''}</span>
+        `;
+    }
+
+    function renderTable(columns, data) {
+        const maxRows = 200;
+        const displayData = data.slice(0, maxRows);
+
+        let html = '<thead><tr>';
+        for (const col of columns) {
+            let cls = '';
+            if (col.isPK) cls = 'pk-col';
+            else if (col.isFK) cls = 'fk-col';
+            html += `<th class="${cls}" title="${col.type}">${escapeHtml(col.name)}</th>`;
+        }
+        html += '</tr></thead><tbody>';
+
+        for (const row of displayData) {
+            html += '<tr>';
+            for (const col of columns) {
+                const val = row[col.name];
+                const display = val === null || val === undefined ? '' : val;
+                html += `<td title="${escapeHtml(String(display))}">${escapeHtml(String(display))}</td>`;
+            }
+            html += '</tr>';
+        }
+
+        if (data.length > maxRows) {
+            html += `<tr><td colspan="${columns.length}" style="text-align:center;color:var(--text-muted);padding:12px;">
+                Showing ${maxRows} of ${data.length} rows
+            </td></tr>`;
+        }
+
+        html += '</tbody>';
+        tableWrap().innerHTML = html;
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    return { init, show, close };
+})();
+===== END: js/dataPreview.js =====
+===== FILE: js/diagramRenderer.js =====
+/**
+ * Diagram Renderer Module
+ * Renders table nodes on canvas with SVG relationship lines
+ * Supports drag, pan, zoom
+ */
+const DiagramRenderer = (() => {
+
+    const COLORS = [
+        '#6c63ff', '#f0b429', '#22c55e', '#ef4444', '#4da6ff',
+        '#a78bfa', '#f472b6', '#fb923c', '#38bdf8', '#34d399',
+        '#e879f9', '#fbbf24', '#f87171', '#60a5fa', '#a3e635',
+        '#c084fc', '#fb7c86', '#2dd4bf'
+    ];
+
+    let canvas, svgLayer, container;
+    let tables = [];
+    let relationships = [];
+    let positions = {};
+    let scale = 1;
+    let panX = 0, panY = 0;
+    let isPanning = false;
+    let panStartX, panStartY;
+    let dragNode = null;
+    let dragOffsetX, dragOffsetY;
+    let onTableClick = null;
+
+    function init(onTableClickCb) {
+        canvas = document.getElementById('canvas');
+        svgLayer = document.getElementById('svg-lines');
+        container = document.getElementById('canvas-container');
+        onTableClick = onTableClickCb;
+
+        // Pan events
+        container.addEventListener('mousedown', onPanStart);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+
+        // Zoom
+        container.addEventListener('wheel', onWheel, { passive: false });
+
+        // Touch support
+        container.addEventListener('touchstart', onTouchStart, { passive: false });
+        container.addEventListener('touchmove', onTouchMove, { passive: false });
+        container.addEventListener('touchend', onTouchEnd);
+
+        // Buttons
+        document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(scale + 0.1));
+        document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(scale - 0.1));
+        document.getElementById('btn-zoom-fit').addEventListener('click', fitToScreen);
+    }
+
+    /**
+     * Render all tables and relationships
+     */
+    function render(tbls, rels) {
+        tables = tbls;
+        relationships = rels;
+
+        // Clear canvas
+        canvas.querySelectorAll('.table-node').forEach(n => n.remove());
+
+        // Calculate initial positions
+        calculateLayout();
+
+        // Render table nodes
+        tables.forEach((table, i) => {
+            renderTableNode(table, i);
+        });
+
+        // Draw lines
+        requestAnimationFrame(() => drawAllLines());
+
+        // Update zoom display
+        updateZoomLabel();
+    }
+
+    /**
+     * Calculate grid layout for tables
+     */
+    function calculateLayout() {
+        if (Object.keys(positions).length === tables.length) return;
+
+        const cols = Math.ceil(Math.sqrt(tables.length));
+        const spacingX = 280;
+        const spacingY = 50;
+        const startX = 60;
+        const startY = 60;
+
+        // Sort tables by number of relationships (most connected first, center)
+        const relCounts = {};
+        tables.forEach(t => { relCounts[t.name] = 0; });
+        relationships.forEach(r => {
+            relCounts[r.fromTable] = (relCounts[r.fromTable] || 0) + 1;
+            relCounts[r.toTable] = (relCounts[r.toTable] || 0) + 1;
+        });
+
+        const sorted = [...tables].sort((a, b) => (relCounts[b.name] || 0) - (relCounts[a.name] || 0));
+
+        sorted.forEach((table, i) => {
+            if (positions[table.name]) return;
+            const col = i % cols;
+            const row = Math.floor(i / cols);
+            // Estimate height based on column count
+            const estimatedHeight = 36 + (table.columns.length * 26) + 8;
+            positions[table.name] = {
+                x: startX + col * spacingX,
+                y: startY + row * (Math.max(estimatedHeight, 150) + spacingY),
+            };
+        });
+    }
+
+    /**
+     * Render a single table node
+     */
+    function renderTableNode(table, index) {
+        const pos = positions[table.name];
+        const colorIndex = index % COLORS.length;
+
+        const node = document.createElement('div');
+        node.className = `table-node table-color-${colorIndex}`;
+        node.id = `table-${table.name}`;
+        node.style.left = pos.x + 'px';
+        node.style.top = pos.y + 'px';
+        node.dataset.table = table.name;
+
+        // Header
+        const header = document.createElement('div');
+        header.className = 'table-node-header';
+        header.innerHTML = `
+            <span class="table-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <line x1="3" y1="9" x2="21" y2="9"/>
+                    <line x1="9" y1="3" x2="9" y2="21"/>
+                </svg>
+            </span>
+            <span class="table-name">${escapeHtml(table.name)}</span>
+            <span class="table-row-count">${table.rowCount} rows</span>
+        `;
+        header.addEventListener('mousedown', (e) => onDragStart(e, node, table.name));
+        header.addEventListener('touchstart', (e) => onTouchDragStart(e, node, table.name), { passive: false });
+        node.appendChild(header);
+
+        // Columns
+        const colContainer = document.createElement('div');
+        colContainer.className = 'table-node-columns';
+
+        table.columns.forEach(col => {
+            const row = document.createElement('div');
+            let rowClass = 'table-col-row';
+            if (col.isPK) rowClass += ' pk-row';
+            if (col.isFK) rowClass += ' fk-row';
+            row.className = rowClass;
+            row.dataset.column = col.name;
+            row.dataset.table = table.name;
+
+            let iconClass = '';
+            let iconText = '';
+            if (col.isPK) { iconClass = 'col-icon pk'; iconText = 'PK'; }
+            else if (col.isFK) { iconClass = 'col-icon fk'; iconText = 'FK'; }
+
+            row.innerHTML = `
+                <span class="${iconClass}">${iconText}</span>
+                <span class="col-name">${escapeHtml(col.name)}</span>
+                <span class="col-type">${col.type}</span>
+            `;
+
+            // Double click to view data
+            row.addEventListener('dblclick', () => {
+                if (onTableClick) onTableClick(table);
+            });
+
+            colContainer.appendChild(row);
+        });
+
+        node.appendChild(colContainer);
+
+        // Single click on node body to preview
+        node.addEventListener('dblclick', (e) => {
+            if (e.target.closest('.table-node-header')) return;
+            if (onTableClick) onTableClick(table);
+        });
+
+        canvas.appendChild(node);
+    }
+
+    // === DRAG ===
+    function onDragStart(e, node, tableName) {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        dragNode = { el: node, name: tableName };
+        const rect = node.getBoundingClientRect();
+        const canvasRect = canvas.getBoundingClientRect();
+        dragOffsetX = (e.clientX - rect.left);
+        dragOffsetY = (e.clientY - rect.top);
+        node.style.zIndex = 10;
+        node.classList.add('highlighted');
+    }
+
+    function onTouchDragStart(e, node, tableName) {
+        if (e.touches.length !== 1) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const touch = e.touches[0];
+        dragNode = { el: node, name: tableName };
+        const rect = node.getBoundingClientRect();
+        dragOffsetX = touch.clientX - rect.left;
+        dragOffsetY = touch.clientY - rect.top;
+        node.style.zIndex = 10;
+        node.classList.add('highlighted');
+    }
+
+    // === PAN ===
+    function onPanStart(e) {
+        if (dragNode) return;
+        if (e.target.closest('.table-node')) return;
+        isPanning = true;
+        panStartX = e.clientX - panX;
+        panStartY = e.clientY - panY;
+        container.classList.add('grabbing');
+    }
+
+    function onMouseMove(e) {
+        if (dragNode) {
+            const canvasRect = container.getBoundingClientRect();
+            const newX = (e.clientX - canvasRect.left - panX) / scale - dragOffsetX;
+            const newY = (e.clientY - canvasRect.top - panY) / scale - dragOffsetY;
+            dragNode.el.style.left = newX + 'px';
+            dragNode.el.style.top = newY + 'px';
+            positions[dragNode.name] = { x: newX, y: newY };
+            drawAllLines();
+        }
+        if (isPanning) {
+            panX = e.clientX - panStartX;
+            panY = e.clientY - panStartY;
+            applyTransform();
+        }
+    }
+
+    function onMouseUp() {
+        if (dragNode) {
+            dragNode.el.style.zIndex = '';
+            dragNode.el.classList.remove('highlighted');
+            dragNode = null;
+        }
+        if (isPanning) {
+            isPanning = false;
+            container.classList.remove('grabbing');
+        }
+    }
+
+    // Touch pan/drag
+    function onTouchStart(e) {
+        if (e.target.closest('.table-node')) return;
+        if (e.touches.length === 1) {
+            isPanning = true;
+            panStartX = e.touches[0].clientX - panX;
+            panStartY = e.touches[0].clientY - panY;
+        }
+    }
+
+    function onTouchMove(e) {
+        if (dragNode && e.touches.length === 1) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const canvasRect = container.getBoundingClientRect();
+            const newX = (touch.clientX - canvasRect.left - panX) / scale - dragOffsetX;
+            const newY = (touch.clientY - canvasRect.top - panY) / scale - dragOffsetY;
+            dragNode.el.style.left = newX + 'px';
+            dragNode.el.style.top = newY + 'px';
+            positions[dragNode.name] = { x: newX, y: newY };
+            drawAllLines();
+        }
+        if (isPanning && e.touches.length === 1) {
+            e.preventDefault();
+            panX = e.touches[0].clientX - panStartX;
+            panY = e.touches[0].clientY - panStartY;
+            applyTransform();
+        }
+    }
+
+    function onTouchEnd() {
+        if (dragNode) {
+            dragNode.el.style.zIndex = '';
+            dragNode.el.classList.remove('highlighted');
+            dragNode = null;
+        }
+        isPanning = false;
+    }
+
+    // === ZOOM ===
+    function onWheel(e) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.08 : 0.08;
+        const newScale = Math.max(0.2, Math.min(3, scale + delta));
+
+        // Zoom towards mouse position
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        panX = mouseX - (mouseX - panX) * (newScale / scale);
+        panY = mouseY - (mouseY - panY) * (newScale / scale);
+
+        scale = newScale;
+        applyTransform();
+        updateZoomLabel();
+    }
+
+    function setZoom(newScale) {
+        scale = Math.max(0.2, Math.min(3, newScale));
+        applyTransform();
+        updateZoomLabel();
+    }
+
+    function fitToScreen() {
+        if (tables.length === 0) return;
+
+        const containerRect = container.getBoundingClientRect();
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        canvas.querySelectorAll('.table-node').forEach(node => {
+            const x = parseFloat(node.style.left);
+            const y = parseFloat(node.style.top);
+            const w = node.offsetWidth;
+            const h = node.offsetHeight;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x + w);
+            maxY = Math.max(maxY, y + h);
+        });
+
+        const contentW = maxX - minX + 80;
+        const contentH = maxY - minY + 80;
+        const scaleX = containerRect.width / contentW;
+        const scaleY = containerRect.height / contentH;
+        scale = Math.min(scaleX, scaleY, 1.5);
+        scale = Math.max(0.2, Math.min(2, scale));
+
+        panX = (containerRect.width - contentW * scale) / 2 - minX * scale + 40;
+        panY = (containerRect.height - contentH * scale) / 2 - minY * scale + 40;
+
+        applyTransform();
+        updateZoomLabel();
+    }
+
+    function applyTransform() {
+        canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    }
+
+    function updateZoomLabel() {
+        document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
+    }
+
+    // === SVG LINES ===
+    function drawAllLines() {
+        svgLayer.innerHTML = '';
+
+        // Need to use positions relative to canvas
+        relationships.forEach(rel => {
+            drawLine(rel);
+        });
+    }
+
+    function drawLine(rel) {
+        const fromNode = document.getElementById(`table-${rel.fromTable}`);
+        const toNode = document.getElementById(`table-${rel.toTable}`);
+        if (!fromNode || !toNode) return;
+
+        // Find the specific column rows
+        const fromColRow = fromNode.querySelector(`[data-column="${rel.fromColumn}"]`);
+        const toColRow = toNode.querySelector(`[data-column="${rel.toColumn}"]`);
+
+        // Get positions relative to canvas (before transform)
+        const fromPos = getColumnAnchor(fromNode, fromColRow, toNode);
+        const toPos = getColumnAnchor(toNode, toColRow, fromNode);
+
+        // Determine color based on relationship
+        const color = rel.type === '1:1' ? '#22c55e' : '#4da6ff';
+
+        // Draw curved path
+        const path = createCurvedPath(fromPos, toPos, color);
+        svgLayer.appendChild(path);
+
+        // Draw invisible wider path for hover
+        const hoverPath = path.cloneNode();
+        hoverPath.setAttribute('class', 'rel-line-hover');
+        hoverPath.setAttribute('stroke', 'transparent');
+        hoverPath.setAttribute('stroke-width', '10');
+        hoverPath.style.pointerEvents = 'stroke';
+        svgLayer.appendChild(hoverPath);
+
+        // Draw relationship type label
+        drawRelLabel(fromPos, toPos, rel.type, color);
+
+        // Draw cardinality markers
+        drawCardinalityMarkers(fromPos, toPos, rel.type, color);
+    }
+
+    function getColumnAnchor(node, colRow, otherNode) {
+        const nodeX = parseFloat(node.style.left);
+        const nodeY = parseFloat(node.style.top);
+        const nodeW = node.offsetWidth;
+        const nodeH = node.offsetHeight;
+
+        const otherX = parseFloat(otherNode.style.left);
+
+        // Determine which side the line should exit from
+        const exitRight = nodeX + nodeW / 2 < otherX + otherNode.offsetWidth / 2;
+
+        let y;
+        if (colRow) {
+            // Position at the column row center
+            const rowRect = colRow.getBoundingClientRect();
+            const nodeRect = node.getBoundingClientRect();
+            const relativeY = (rowRect.top - nodeRect.top + rowRect.height / 2) / scale;
+            y = nodeY + relativeY;
+        } else {
+            y = nodeY + nodeH / 2;
+        }
+
+        return {
+            x: exitRight ? nodeX + nodeW : nodeX,
+            y: y,
+            side: exitRight ? 'right' : 'left'
+        };
+    }
+
+    function createCurvedPath(from, to, color) {
+        const dx = Math.abs(to.x - from.x);
+        const controlOffset = Math.max(40, Math.min(dx * 0.4, 150));
+
+        const cp1x = from.side === 'right' ? from.x + controlOffset : from.x - controlOffset;
+        const cp2x = to.side === 'right' ? to.x + controlOffset : to.x - controlOffset;
+
+        const d = `M ${from.x} ${from.y} C ${cp1x} ${from.y}, ${cp2x} ${to.y}, ${to.x} ${to.y}`;
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('class', 'rel-line');
+        path.setAttribute('stroke', color);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke-width', '2');
+        return path;
+    }
+
+    function drawRelLabel(from, to, type, color) {
+        const midX = (from.x + to.x) / 2;
+        const midY = (from.y + to.y) / 2;
+
+        // Background rect
+        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        const textWidth = type.length * 7 + 8;
+        bg.setAttribute('x', midX - textWidth / 2);
+        bg.setAttribute('y', midY - 9);
+        bg.setAttribute('width', textWidth);
+        bg.setAttribute('height', 18);
+        bg.setAttribute('class', 'rel-label-bg');
+        bg.setAttribute('fill', '#1a1b2e');
+        bg.setAttribute('stroke', color);
+        bg.setAttribute('stroke-width', '1');
+        bg.setAttribute('rx', '4');
+        svgLayer.appendChild(bg);
+
+        // Text
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', midX);
+        text.setAttribute('y', midY + 4);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('class', 'rel-label');
+        text.setAttribute('fill', color);
+        text.textContent = type;
+        svgLayer.appendChild(text);
+    }
+
+    function drawCardinalityMarkers(from, to, type, color) {
+        // Draw "1" at the "to" side (PK side) and "N" or "1" at the "from" side (FK side)
+        const markerOffset = 15;
+
+        // "From" side marker (FK side - many side)
+        const fromMarkerX = from.side === 'right' ? from.x + markerOffset : from.x - markerOffset;
+        drawSmallMarker(fromMarkerX, from.y - 12, type === '1:1' ? '1' : 'N', color);
+
+        // "To" side marker (PK side - one side)
+        const toMarkerX = to.side === 'right' ? to.x + markerOffset : to.x - markerOffset;
+        drawSmallMarker(toMarkerX, to.y - 12, '1', color);
+    }
+
+    function drawSmallMarker(x, y, label, color) {
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', x);
+        text.setAttribute('y', y);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('font-size', '10');
+        text.setAttribute('font-family', 'monospace');
+        text.setAttribute('fill', color);
+        text.setAttribute('opacity', '0.7');
+        text.textContent = label;
+        svgLayer.appendChild(text);
+    }
+
+    /**
+     * Highlight a table node
+     */
+    function highlightTable(tableName) {
+        canvas.querySelectorAll('.table-node').forEach(n => n.classList.remove('highlighted'));
+        const node = document.getElementById(`table-${tableName}`);
+        if (node) {
+            node.classList.add('highlighted');
+            // Scroll into view
+            const pos = positions[tableName];
+            if (pos) {
+                const containerRect = container.getBoundingClientRect();
+                panX = containerRect.width / 2 - pos.x * scale;
+                panY = containerRect.height / 2 - pos.y * scale;
+                applyTransform();
+            }
+        }
+    }
+
+    /**
+     * Redraw lines (call after relationship changes)
+     */
+    function updateRelationships(rels) {
+        relationships = rels;
+        drawAllLines();
+    }
+
+    function getPositions() {
+        return positions;
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    return {
+        init,
+        render,
+        highlightTable,
+        updateRelationships,
+        drawAllLines,
+        fitToScreen,
+        getPositions,
+    };
+})();
+===== END: js/diagramRenderer.js =====
+===== FILE: js/relationshipDetector.js =====
+/**
+ * Relationship Detector Module
+ * Auto-detects FK relationships between tables based on column naming conventions
+ */
+const RelationshipDetector = (() => {
+
+    /**
+     * Detect relationships between all tables
+     * @param {Object[]} tables - Array of table objects from CsvParser
+     * @returns {Object[]} relationships
+     */
+    function detect(tables) {
+        const relationships = [];
+        const tableMap = buildTableMap(tables);
+
+        for (const table of tables) {
+            for (const col of table.columns) {
+                const found = findRelationship(table, col, tables, tableMap);
+                if (found && !isDuplicate(relationships, found)) {
+                    relationships.push(found);
+                    // Mark columns as FK
+                    col.isFK = true;
+                }
+            }
+        }
+
+        return relationships;
+    }
+
+    /**
+     * Build a lookup map of table names (various forms) to table objects
+     */
+    function buildTableMap(tables) {
+        const map = {};
+        for (const t of tables) {
+            const lower = t.name.toLowerCase();
+            map[lower] = t;
+            // Also add singular/plural variants
+            if (lower.endsWith('s')) {
+                map[lower.slice(0, -1)] = t; // "orders" -> "order"
+            }
+            if (lower.endsWith('ies')) {
+                map[lower.slice(0, -3) + 'y'] = t; // "categories" -> "category"
+            }
+            if (lower.endsWith('es') && !lower.endsWith('ies')) {
+                map[lower.slice(0, -2)] = t; // "addresses" -> "address"
+            }
+            // Add plural if singular
+            if (!lower.endsWith('s')) {
+                map[lower + 's'] = t;
+            }
+        }
+        return map;
+    }
+
+    /**
+     * Try to find a relationship for a given column
+     */
+    function findRelationship(sourceTable, col, allTables, tableMap) {
+        const colName = col.name;
+
+        // Skip if this is likely the table's own PK
+        if (col.isPK) return null;
+
+        // Pattern 1: {TableName}Id or {TableName}_Id
+        let match = colName.match(/^(.+?)_?[Ii][Dd]$/);
+        if (match) {
+            const candidate = match[1].toLowerCase();
+            // Don't match if candidate is the same table
+            if (candidate === sourceTable.name.toLowerCase()) return null;
+            if (candidate === sourceTable.name.toLowerCase().replace(/s$/, '')) return null;
+
+            const targetTable = tableMap[candidate];
+            if (targetTable && targetTable.name !== sourceTable.name) {
+                const targetCol = findPKColumn(targetTable);
+                if (targetCol) {
+                    return {
+                        id: generateId(),
+                        fromTable: sourceTable.name,
+                        fromColumn: colName,
+                        toTable: targetTable.name,
+                        toColumn: targetCol.name,
+                        type: '1:N',
+                    };
+                }
+            }
+        }
+
+        // Pattern 2: FK_{TableName} or fk_{TableName}
+        match = colName.match(/^[Ff][Kk]_(.+)/);
+        if (match) {
+            const candidate = match[1].toLowerCase().replace(/_?id$/i, '');
+            const targetTable = tableMap[candidate];
+            if (targetTable && targetTable.name !== sourceTable.name) {
+                const targetCol = findPKColumn(targetTable);
+                if (targetCol) {
+                    return {
+                        id: generateId(),
+                        fromTable: sourceTable.name,
+                        fromColumn: colName,
+                        toTable: targetTable.name,
+                        toColumn: targetCol.name,
+                        type: '1:N',
+                    };
+                }
+            }
+        }
+
+        // Pattern 3: Exact column name match with another table's PK
+        for (const otherTable of allTables) {
+            if (otherTable.name === sourceTable.name) continue;
+            for (const otherCol of otherTable.columns) {
+                if (otherCol.isPK && otherCol.name === colName) {
+                    return {
+                        id: generateId(),
+                        fromTable: sourceTable.name,
+                        fromColumn: colName,
+                        toTable: otherTable.name,
+                        toColumn: otherCol.name,
+                        type: '1:N',
+                    };
+                }
+            }
+        }
+
+        // Pattern 4: Column named {TableName}_{ColumnName} e.g., Order_Id -> Orders.Id
+        match = colName.match(/^(.+?)_(.+)$/);
+        if (match) {
+            const tablePart = match[1].toLowerCase();
+            const colPart = match[2];
+            const targetTable = tableMap[tablePart];
+            if (targetTable && targetTable.name !== sourceTable.name) {
+                const targetCol = targetTable.columns.find(c =>
+                    c.name.toLowerCase() === colPart.toLowerCase()
+                );
+                if (targetCol) {
+                    return {
+                        id: generateId(),
+                        fromTable: sourceTable.name,
+                        fromColumn: colName,
+                        toTable: targetTable.name,
+                        toColumn: targetCol.name,
+                        type: '1:N',
+                    };
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Find the PK column of a table
+     */
+    function findPKColumn(table) {
+        // First check for marked PK
+        let pk = table.columns.find(c => c.isPK);
+        if (pk) return pk;
+
+        // Check for column named "Id"
+        pk = table.columns.find(c => /^[Ii][Dd]$/.test(c.name));
+        if (pk) return pk;
+
+        // Check for {TableName}Id
+        const tableNameLower = table.name.toLowerCase();
+        pk = table.columns.find(c => c.name.toLowerCase() === tableNameLower + 'id');
+        if (pk) return pk;
+
+        // Check for {TableName}_Id
+        pk = table.columns.find(c => c.name.toLowerCase() === tableNameLower + '_id');
+        if (pk) return pk;
+
+        // Fallback: first column that has "id" in name
+        pk = table.columns.find(c => /id$/i.test(c.name));
+        return pk || null;
+    }
+
+    /**
+     * Check for duplicate relationship
+     */
+    function isDuplicate(relationships, newRel) {
+        return relationships.some(r =>
+            (r.fromTable === newRel.fromTable && r.fromColumn === newRel.fromColumn &&
+             r.toTable === newRel.toTable && r.toColumn === newRel.toColumn) ||
+            (r.fromTable === newRel.toTable && r.fromColumn === newRel.toColumn &&
+             r.toTable === newRel.fromTable && r.toColumn === newRel.fromColumn)
+        );
+    }
+
+    let idCounter = 0;
+    function generateId() {
+        return 'rel_' + (++idCounter);
+    }
+
+    /**
+     * Add a manual relationship
+     */
+    function createManual(fromTable, fromColumn, toTable, toColumn, type) {
+        return {
+            id: generateId(),
+            fromTable,
+            fromColumn,
+            toTable,
+            toColumn,
+            type: type || '1:N',
+        };
+    }
+
+    return { detect, createManual };
+})();
+===== END: js/relationshipDetector.js =====
+===== FILE: lib/papaparse.min.js =====
+/* @license
+Papa Parse
+v5.4.1
+https://github.com/mholt/PapaParse
+License: MIT
+*/
+!function(e,t){"function"==typeof define&&define.amd?define([],t):"object"==typeof module&&"undefined"!=typeof exports?module.exports=t():e.Papa=t()}(this,function s(){"use strict";var f="undefined"!=typeof self?self:"undefined"!=typeof window?window:void 0!==f?f:{};var n=!f.document&&!!f.postMessage,o=f.IS_PAPA_WORKER||!1,a={},u=0,b={parse:function(e,t){var r=(t=t||{}).dynamicTyping||!1;J(r)&&(t.dynamicTypingFunction=r,r={});if(t.dynamicTyping=r,t.transform=!!J(t.transform)&&t.transform,t.worker&&b.WORKERS_SUPPORTED){var i=function(){if(!b.WORKERS_SUPPORTED)return!1;var e=(r=f.URL||f.webkitURL||null,i=s.toString(),b.BLOB_URL||(b.BLOB_URL=r.createObjectURL(new Blob(["var global = (function() { if (typeof self !== 'undefined') { return self; } if (typeof window !== 'undefined') { return window; } if (typeof global !== 'undefined') { return global; } return {}; })(); global.IS_PAPA_WORKER=true; ","(",i,")();"],{type:"text/javascript"})))),t=new f.Worker(e);var r,i;return t.onmessage=_,t.id=u++,a[t.id]=t}();return i.userStep=t.step,i.userChunk=t.chunk,i.userComplete=t.complete,i.userError=t.error,t.step=J(t.step),t.chunk=J(t.chunk),t.complete=J(t.complete),t.error=J(t.error),delete t.worker,void i.postMessage({input:e,config:t,workerId:i.id})}var n=null;b.NODE_STREAM_INPUT,"string"==typeof e?(e=function(e){if(65279===e.charCodeAt(0))return e.slice(1);return e}(e),n=t.download?new l(t):new p(t)):!0===e.readable&&J(e.read)&&J(e.on)?n=new g(t):(f.File&&e instanceof File||e instanceof Object)&&(n=new c(t));return n.stream(e)},unparse:function(e,t){var n=!1,_=!0,m=",",y="\r\n",s='"',a=s+s,r=!1,i=null,o=!1;!function(){if("object"!=typeof t)return;"string"!=typeof t.delimiter||b.BAD_DELIMITERS.filter(function(e){return-1!==t.delimiter.indexOf(e)}).length||(m=t.delimiter);("boolean"==typeof t.quotes||"function"==typeof t.quotes||Array.isArray(t.quotes))&&(n=t.quotes);"boolean"!=typeof t.skipEmptyLines&&"string"!=typeof t.skipEmptyLines||(r=t.skipEmptyLines);"string"==typeof t.newline&&(y=t.newline);"string"==typeof t.quoteChar&&(s=t.quoteChar);"boolean"==typeof t.header&&(_=t.header);if(Array.isArray(t.columns)){if(0===t.columns.length)throw new Error("Option columns is empty");i=t.columns}void 0!==t.escapeChar&&(a=t.escapeChar+s);("boolean"==typeof t.escapeFormulae||t.escapeFormulae instanceof RegExp)&&(o=t.escapeFormulae instanceof RegExp?t.escapeFormulae:/^[=+\-@\t\r].*$/)}();var u=new RegExp(Q(s),"g");"string"==typeof e&&(e=JSON.parse(e));if(Array.isArray(e)){if(!e.length||Array.isArray(e[0]))return h(null,e,r);if("object"==typeof e[0])return h(i||Object.keys(e[0]),e,r)}else if("object"==typeof e)return"string"==typeof e.data&&(e.data=JSON.parse(e.data)),Array.isArray(e.data)&&(e.fields||(e.fields=e.meta&&e.meta.fields||i),e.fields||(e.fields=Array.isArray(e.data[0])?e.fields:"object"==typeof e.data[0]?Object.keys(e.data[0]):[]),Array.isArray(e.data[0])||"object"==typeof e.data[0]||(e.data=[e.data])),h(e.fields||[],e.data||[],r);throw new Error("Unable to serialize unrecognized input");function h(e,t,r){var i="";"string"==typeof e&&(e=JSON.parse(e)),"string"==typeof t&&(t=JSON.parse(t));var n=Array.isArray(e)&&0<e.length,s=!Array.isArray(t[0]);if(n&&_){for(var a=0;a<e.length;a++)0<a&&(i+=m),i+=v(e[a],a);0<t.length&&(i+=y)}for(var o=0;o<t.length;o++){var u=n?e.length:t[o].length,h=!1,f=n?0===Object.keys(t[o]).length:0===t[o].length;if(r&&!n&&(h="greedy"===r?""===t[o].join("").trim():1===t[o].length&&0===t[o][0].length),"greedy"===r&&n){for(var d=[],l=0;l<u;l++){var c=s?e[l]:l;d.push(t[o][c])}h=""===d.join("").trim()}if(!h){for(var p=0;p<u;p++){0<p&&!f&&(i+=m);var g=n&&s?e[p]:p;i+=v(t[o][g],p)}o<t.length-1&&(!r||0<u&&!f)&&(i+=y)}}return i}function v(e,t){if(null==e)return"";if(e.constructor===Date)return JSON.stringify(e).slice(1,25);var r=!1;o&&"string"==typeof e&&o.test(e)&&(e="'"+e,r=!0);var i=e.toString().replace(u,a);return(r=r||!0===n||"function"==typeof n&&n(e,t)||Array.isArray(n)&&n[t]||function(e,t){for(var r=0;r<t.length;r++)if(-1<e.indexOf(t[r]))return!0;return!1}(i,b.BAD_DELIMITERS)||-1<i.indexOf(m)||" "===i.charAt(0)||" "===i.charAt(i.length-1))?s+i+s:i}}};if(b.RECORD_SEP=String.fromCharCode(30),b.UNIT_SEP=String.fromCharCode(31),b.BYTE_ORDER_MARK="\ufeff",b.BAD_DELIMITERS=["\r","\n",'"',b.BYTE_ORDER_MARK],b.WORKERS_SUPPORTED=!n&&!!f.Worker,b.NODE_STREAM_INPUT=1,b.LocalChunkSize=10485760,b.RemoteChunkSize=5242880,b.DefaultDelimiter=",",b.Parser=E,b.ParserHandle=r,b.NetworkStreamer=l,b.FileStreamer=c,b.StringStreamer=p,b.ReadableStreamStreamer=g,f.jQuery){var d=f.jQuery;d.fn.parse=function(o){var r=o.config||{},u=[];return this.each(function(e){if(!("INPUT"===d(this).prop("tagName").toUpperCase()&&"file"===d(this).attr("type").toLowerCase()&&f.FileReader)||!this.files||0===this.files.length)return!0;for(var t=0;t<this.files.length;t++)u.push({file:this.files[t],inputElem:this,instanceConfig:d.extend({},r)})}),e(),this;function e(){if(0!==u.length){var e,t,r,i,n=u[0];if(J(o.before)){var s=o.before(n.file,n.inputElem);if("object"==typeof s){if("abort"===s.action)return e="AbortError",t=n.file,r=n.inputElem,i=s.reason,void(J(o.error)&&o.error({name:e},t,r,i));if("skip"===s.action)return void h();"object"==typeof s.config&&(n.instanceConfig=d.extend(n.instanceConfig,s.config))}else if("skip"===s)return void h()}var a=n.instanceConfig.complete;n.instanceConfig.complete=function(e){J(a)&&a(e,n.file,n.inputElem),h()},b.parse(n.file,n.instanceConfig)}else J(o.complete)&&o.complete()}function h(){u.splice(0,1),e()}}}function h(e){this._handle=null,this._finished=!1,this._completed=!1,this._halted=!1,this._input=null,this._baseIndex=0,this._partialLine="",this._rowCount=0,this._start=0,this._nextChunk=null,this.isFirstChunk=!0,this._completeResults={data:[],errors:[],meta:{}},function(e){var t=w(e);t.chunkSize=parseInt(t.chunkSize),e.step||e.chunk||(t.chunkSize=null);this._handle=new r(t),(this._handle.streamer=this)._config=t}.call(this,e),this.parseChunk=function(e,t){if(this.isFirstChunk&&J(this._config.beforeFirstChunk)){var r=this._config.beforeFirstChunk(e);void 0!==r&&(e=r)}this.isFirstChunk=!1,this._halted=!1;var i=this._partialLine+e;this._partialLine="";var n=this._handle.parse(i,this._baseIndex,!this._finished);if(!this._handle.paused()&&!this._handle.aborted()){var s=n.meta.cursor;this._finished||(this._partialLine=i.substring(s-this._baseIndex),this._baseIndex=s),n&&n.data&&(this._rowCount+=n.data.length);var a=this._finished||this._config.preview&&this._rowCount>=this._config.preview;if(o)f.postMessage({results:n,workerId:b.WORKER_ID,finished:a});else if(J(this._config.chunk)&&!t){if(this._config.chunk(n,this._handle),this._handle.paused()||this._handle.aborted())return void(this._halted=!0);n=void 0,this._completeResults=void 0}return this._config.step||this._config.chunk||(this._completeResults.data=this._completeResults.data.concat(n.data),this._completeResults.errors=this._completeResults.errors.concat(n.errors),this._completeResults.meta=n.meta),this._completed||!a||!J(this._config.complete)||n&&n.meta.aborted||(this._config.complete(this._completeResults,this._input),this._completed=!0),a||n&&n.meta.paused||this._nextChunk(),n}this._halted=!0},this._sendError=function(e){J(this._config.error)?this._config.error(e):o&&this._config.error&&f.postMessage({workerId:b.WORKER_ID,error:e,finished:!1})}}function l(e){var i;(e=e||{}).chunkSize||(e.chunkSize=b.RemoteChunkSize),h.call(this,e),this._nextChunk=n?function(){this._readChunk(),this._chunkLoaded()}:function(){this._readChunk()},this.stream=function(e){this._input=e,this._nextChunk()},this._readChunk=function(){if(this._finished)this._chunkLoaded();else{if(i=new XMLHttpRequest,this._config.withCredentials&&(i.withCredentials=this._config.withCredentials),n||(i.onload=v(this._chunkLoaded,this),i.onerror=v(this._chunkError,this)),i.open(this._config.downloadRequestBody?"POST":"GET",this._input,!n),this._config.downloadRequestHeaders){var e=this._config.downloadRequestHeaders;for(var t in e)i.setRequestHeader(t,e[t])}if(this._config.chunkSize){var r=this._start+this._config.chunkSize-1;i.setRequestHeader("Range","bytes="+this._start+"-"+r)}try{i.send(this._config.downloadRequestBody)}catch(e){this._chunkError(e.message)}n&&0===i.status&&this._chunkError()}},this._chunkLoaded=function(){4===i.readyState&&(i.status<200||400<=i.status?this._chunkError():(this._start+=this._config.chunkSize?this._config.chunkSize:i.responseText.length,this._finished=!this._config.chunkSize||this._start>=function(e){var t=e.getResponseHeader("Content-Range");if(null===t)return-1;return parseInt(t.substring(t.lastIndexOf("/")+1))}(i),this.parseChunk(i.responseText)))},this._chunkError=function(e){var t=i.statusText||e;this._sendError(new Error(t))}}function c(e){var i,n;(e=e||{}).chunkSize||(e.chunkSize=b.LocalChunkSize),h.call(this,e);var s="undefined"!=typeof FileReader;this.stream=function(e){this._input=e,n=e.slice||e.webkitSlice||e.mozSlice,s?((i=new FileReader).onload=v(this._chunkLoaded,this),i.onerror=v(this._chunkError,this)):i=new FileReaderSync,this._nextChunk()},this._nextChunk=function(){this._finished||this._config.preview&&!(this._rowCount<this._config.preview)||this._readChunk()},this._readChunk=function(){var e=this._input;if(this._config.chunkSize){var t=Math.min(this._start+this._config.chunkSize,this._input.size);e=n.call(e,this._start,t)}var r=i.readAsText(e,this._config.encoding);s||this._chunkLoaded({target:{result:r}})},this._chunkLoaded=function(e){this._start+=this._config.chunkSize,this._finished=!this._config.chunkSize||this._start>=this._input.size,this.parseChunk(e.target.result)},this._chunkError=function(){this._sendError(i.error)}}function p(e){var r;h.call(this,e=e||{}),this.stream=function(e){return r=e,this._nextChunk()},this._nextChunk=function(){if(!this._finished){var e,t=this._config.chunkSize;return t?(e=r.substring(0,t),r=r.substring(t)):(e=r,r=""),this._finished=!r,this.parseChunk(e)}}}function g(e){h.call(this,e=e||{});var t=[],r=!0,i=!1;this.pause=function(){h.prototype.pause.apply(this,arguments),this._input.pause()},this.resume=function(){h.prototype.resume.apply(this,arguments),this._input.resume()},this.stream=function(e){this._input=e,this._input.on("data",this._streamData),this._input.on("end",this._streamEnd),this._input.on("error",this._streamError)},this._checkIsFinished=function(){i&&1===t.length&&(this._finished=!0)},this._nextChunk=function(){this._checkIsFinished(),t.length?this.parseChunk(t.shift()):r=!0},this._streamData=v(function(e){try{t.push("string"==typeof e?e:e.toString(this._config.encoding)),r&&(r=!1,this._checkIsFinished(),this.parseChunk(t.shift()))}catch(e){this._streamError(e)}},this),this._streamError=v(function(e){this._streamCleanUp(),this._sendError(e)},this),this._streamEnd=v(function(){this._streamCleanUp(),i=!0,this._streamData("")},this),this._streamCleanUp=v(function(){this._input.removeListener("data",this._streamData),this._input.removeListener("end",this._streamEnd),this._input.removeListener("error",this._streamError)},this)}function r(m){var a,o,u,i=Math.pow(2,53),n=-i,s=/^\s*-?(\d+\.?|\.\d+|\d+\.\d+)([eE][-+]?\d+)?\s*$/,h=/^((\d{4}-[01]\d-[0-3]\dT[0-2]\d:[0-5]\d:[0-5]\d\.\d+([+-][0-2]\d:[0-5]\d|Z))|(\d{4}-[01]\d-[0-3]\dT[0-2]\d:[0-5]\d:[0-5]\d([+-][0-2]\d:[0-5]\d|Z))|(\d{4}-[01]\d-[0-3]\dT[0-2]\d:[0-5]\d([+-][0-2]\d:[0-5]\d|Z)))$/,t=this,r=0,f=0,d=!1,e=!1,l=[],c={data:[],errors:[],meta:{}};if(J(m.step)){var p=m.step;m.step=function(e){if(c=e,_())g();else{if(g(),0===c.data.length)return;r+=e.data.length,m.preview&&r>m.preview?o.abort():(c.data=c.data[0],p(c,t))}}}function y(e){return"greedy"===m.skipEmptyLines?""===e.join("").trim():1===e.length&&0===e[0].length}function g(){return c&&u&&(k("Delimiter","UndetectableDelimiter","Unable to auto-detect delimiting character; defaulted to '"+b.DefaultDelimiter+"'"),u=!1),m.skipEmptyLines&&(c.data=c.data.filter(function(e){return!y(e)})),_()&&function(){if(!c)return;function e(e,t){J(m.transformHeader)&&(e=m.transformHeader(e,t)),l.push(e)}if(Array.isArray(c.data[0])){for(var t=0;_()&&t<c.data.length;t++)c.data[t].forEach(e);c.data.splice(0,1)}else c.data.forEach(e)}(),function(){if(!c||!m.header&&!m.dynamicTyping&&!m.transform)return c;function e(e,t){var r,i=m.header?{}:[];for(r=0;r<e.length;r++){var n=r,s=e[r];m.header&&(n=r>=l.length?"__parsed_extra":l[r]),m.transform&&(s=m.transform(s,n)),s=v(n,s),"__parsed_extra"===n?(i[n]=i[n]||[],i[n].push(s)):i[n]=s}return m.header&&(r>l.length?k("FieldMismatch","TooManyFields","Too many fields: expected "+l.length+" fields but parsed "+r,f+t):r<l.length&&k("FieldMismatch","TooFewFields","Too few fields: expected "+l.length+" fields but parsed "+r,f+t)),i}var t=1;!c.data.length||Array.isArray(c.data[0])?(c.data=c.data.map(e),t=c.data.length):c.data=e(c.data,0);m.header&&c.meta&&(c.meta.fields=l);return f+=t,c}()}function _(){return m.header&&0===l.length}function v(e,t){return r=e,m.dynamicTypingFunction&&void 0===m.dynamicTyping[r]&&(m.dynamicTyping[r]=m.dynamicTypingFunction(r)),!0===(m.dynamicTyping[r]||m.dynamicTyping)?"true"===t||"TRUE"===t||"false"!==t&&"FALSE"!==t&&(function(e){if(s.test(e)){var t=parseFloat(e);if(n<t&&t<i)return!0}return!1}(t)?parseFloat(t):h.test(t)?new Date(t):""===t?null:t):t;var r}function k(e,t,r,i){var n={type:e,code:t,message:r};void 0!==i&&(n.row=i),c.errors.push(n)}this.parse=function(e,t,r){var i=m.quoteChar||'"';if(m.newline||(m.newline=function(e,t){e=e.substring(0,1048576);var r=new RegExp(Q(t)+"([^]*?)"+Q(t),"gm"),i=(e=e.replace(r,"")).split("\r"),n=e.split("\n"),s=1<n.length&&n[0].length<i[0].length;if(1===i.length||s)return"\n";for(var a=0,o=0;o<i.length;o++)"\n"===i[o][0]&&a++;return a>=i.length/2?"\r\n":"\r"}(e,i)),u=!1,m.delimiter)J(m.delimiter)&&(m.delimiter=m.delimiter(e),c.meta.delimiter=m.delimiter);else{var n=function(e,t,r,i,n){var s,a,o,u;n=n||[",","\t","|",";",b.RECORD_SEP,b.UNIT_SEP];for(var h=0;h<n.length;h++){var f=n[h],d=0,l=0,c=0;o=void 0;for(var p=new E({comments:i,delimiter:f,newline:t,preview:10}).parse(e),g=0;g<p.data.length;g++)if(r&&y(p.data[g]))c++;else{var _=p.data[g].length;l+=_,void 0!==o?0<_&&(d+=Math.abs(_-o),o=_):o=_}0<p.data.length&&(l/=p.data.length-c),(void 0===a||d<=a)&&(void 0===u||u<l)&&1.99<l&&(a=d,s=f,u=l)}return{successful:!!(m.delimiter=s),bestDelimiter:s}}(e,m.newline,m.skipEmptyLines,m.comments,m.delimitersToGuess);n.successful?m.delimiter=n.bestDelimiter:(u=!0,m.delimiter=b.DefaultDelimiter),c.meta.delimiter=m.delimiter}var s=w(m);return m.preview&&m.header&&s.preview++,a=e,o=new E(s),c=o.parse(a,t,r),g(),d?{meta:{paused:!0}}:c||{meta:{paused:!1}}},this.paused=function(){return d},this.pause=function(){d=!0,o.abort(),a=J(m.chunk)?"":a.substring(o.getCharIndex())},this.resume=function(){t.streamer._halted?(d=!1,t.streamer.parseChunk(a,!0)):setTimeout(t.resume,3)},this.aborted=function(){return e},this.abort=function(){e=!0,o.abort(),c.meta.aborted=!0,J(m.complete)&&m.complete(c),a=""}}function Q(e){return e.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}function E(j){var z,M=(j=j||{}).delimiter,P=j.newline,U=j.comments,q=j.step,N=j.preview,B=j.fastMode,K=z=void 0===j.quoteChar||null===j.quoteChar?'"':j.quoteChar;if(void 0!==j.escapeChar&&(K=j.escapeChar),("string"!=typeof M||-1<b.BAD_DELIMITERS.indexOf(M))&&(M=","),U===M)throw new Error("Comment character same as delimiter");!0===U?U="#":("string"!=typeof U||-1<b.BAD_DELIMITERS.indexOf(U))&&(U=!1),"\n"!==P&&"\r"!==P&&"\r\n"!==P&&(P="\n");var W=0,H=!1;this.parse=function(i,t,r){if("string"!=typeof i)throw new Error("Input must be a string");var n=i.length,e=M.length,s=P.length,a=U.length,o=J(q),u=[],h=[],f=[],d=W=0;if(!i)return L();if(j.header&&!t){var l=i.split(P)[0].split(M),c=[],p={},g=!1;for(var _ in l){var m=l[_];J(j.transformHeader)&&(m=j.transformHeader(m,_));var y=m,v=p[m]||0;for(0<v&&(g=!0,y=m+"_"+v),p[m]=v+1;c.includes(y);)y=y+"_"+v;c.push(y)}if(g){var k=i.split(P);k[0]=c.join(M),i=k.join(P)}}if(B||!1!==B&&-1===i.indexOf(z)){for(var b=i.split(P),E=0;E<b.length;E++){if(f=b[E],W+=f.length,E!==b.length-1)W+=P.length;else if(r)return L();if(!U||f.substring(0,a)!==U){if(o){if(u=[],I(f.split(M)),F(),H)return L()}else I(f.split(M));if(N&&N<=E)return u=u.slice(0,N),L(!0)}}return L()}for(var w=i.indexOf(M,W),R=i.indexOf(P,W),C=new RegExp(Q(K)+Q(z),"g"),S=i.indexOf(z,W);;)if(i[W]!==z)if(U&&0===f.length&&i.substring(W,W+a)===U){if(-1===R)return L();W=R+s,R=i.indexOf(P,W),w=i.indexOf(M,W)}else if(-1!==w&&(w<R||-1===R))f.push(i.substring(W,w)),W=w+e,w=i.indexOf(M,W);else{if(-1===R)break;if(f.push(i.substring(W,R)),D(R+s),o&&(F(),H))return L();if(N&&u.length>=N)return L(!0)}else for(S=W,W++;;){if(-1===(S=i.indexOf(z,S+1)))return r||h.push({type:"Quotes",code:"MissingQuotes",message:"Quoted field unterminated",row:u.length,index:W}),T();if(S===n-1)return T(i.substring(W,S).replace(C,z));if(z!==K||i[S+1]!==K){if(z===K||0===S||i[S-1]!==K){-1!==w&&w<S+1&&(w=i.indexOf(M,S+1)),-1!==R&&R<S+1&&(R=i.indexOf(P,S+1));var O=A(-1===R?w:Math.min(w,R));if(i.substr(S+1+O,e)===M){f.push(i.substring(W,S).replace(C,z)),i[W=S+1+O+e]!==z&&(S=i.indexOf(z,W)),w=i.indexOf(M,W),R=i.indexOf(P,W);break}var x=A(R);if(i.substring(S+1+x,S+1+x+s)===P){if(f.push(i.substring(W,S).replace(C,z)),D(S+1+x+s),w=i.indexOf(M,W),S=i.indexOf(z,W),o&&(F(),H))return L();if(N&&u.length>=N)return L(!0);break}h.push({type:"Quotes",code:"InvalidQuotes",message:"Trailing quote on quoted field is malformed",row:u.length,index:W}),S++}}else S++}return T();function I(e){u.push(e),d=W}function A(e){var t=0;if(-1!==e){var r=i.substring(S+1,e);r&&""===r.trim()&&(t=r.length)}return t}function T(e){return r||(void 0===e&&(e=i.substring(W)),f.push(e),W=n,I(f),o&&F()),L()}function D(e){W=e,I(f),f=[],R=i.indexOf(P,W)}function L(e){return{data:u,errors:h,meta:{delimiter:M,linebreak:P,aborted:H,truncated:!!e,cursor:d+(t||0)}}}function F(){q(L()),u=[],h=[]}},this.abort=function(){H=!0},this.getCharIndex=function(){return W}}function _(e){var t=e.data,r=a[t.workerId],i=!1;if(t.error)r.userError(t.error,t.file);else if(t.results&&t.results.data){var n={abort:function(){i=!0,m(t.workerId,{data:[],errors:[],meta:{aborted:!0}})},pause:y,resume:y};if(J(r.userStep)){for(var s=0;s<t.results.data.length&&(r.userStep({data:t.results.data[s],errors:t.results.errors,meta:t.results.meta},n),!i);s++);delete t.results}else J(r.userChunk)&&(r.userChunk(t.results,n,t.file),delete t.results)}t.finished&&!i&&m(t.workerId,t.results)}function m(e,t){var r=a[e];J(r.userComplete)&&r.userComplete(t),r.terminate(),delete a[e]}function y(){throw new Error("Not implemented.")}function w(e){if("object"!=typeof e||null===e)return e;var t=Array.isArray(e)?[]:{};for(var r in e)t[r]=w(e[r]);return t}function v(e,t){return function(){e.apply(t,arguments)}}function J(e){return"function"==typeof e}return o&&(f.onmessage=function(e){var t=e.data;void 0===b.WORKER_ID&&t&&(b.WORKER_ID=t.workerId);if("string"==typeof t.input)f.postMessage({workerId:b.WORKER_ID,results:b.parse(t.input,t.config),finished:!0});else if(f.File&&t.input instanceof File||t.input instanceof Object){var r=b.parse(t.input,t.config);r&&f.postMessage({workerId:b.WORKER_ID,results:r,finished:!0})}}),(l.prototype=Object.create(h.prototype)).constructor=l,(c.prototype=Object.create(h.prototype)).constructor=c,(p.prototype=Object.create(p.prototype)).constructor=p,(g.prototype=Object.create(h.prototype)).constructor=g,b});
+===== END: lib/papaparse.min.js =====
