@@ -724,6 +724,71 @@ body {
     ry: 3;
 }
 
+/* === Filter Controls === */
+.filter-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.filter-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 3px 6px;
+    border-radius: var(--radius);
+    transition: background var(--transition);
+}
+.filter-check:hover {
+    background: var(--bg-hover);
+}
+.filter-check input[type="checkbox"] {
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.filter-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* === Focus/Dim States === */
+.table-node.dimmed {
+    opacity: 0.15;
+    filter: grayscale(80%);
+    transition: opacity 0.25s, filter 0.25s;
+}
+.table-node.focused {
+    border-color: var(--accent);
+    box-shadow: 0 0 24px rgba(108, 99, 255, 0.4);
+    z-index: 4;
+    transition: opacity 0.25s, filter 0.25s;
+}
+.table-node {
+    transition: opacity 0.25s, filter 0.25s, box-shadow var(--transition), border-color var(--transition);
+}
+
+/* SVG line states */
+.rel-group {
+    transition: opacity 0.2s;
+}
+.rel-group.dimmed {
+    opacity: 0.06;
+}
+.rel-group.highlighted {
+    opacity: 1;
+}
+.rel-group .rel-line {
+    transition: stroke-width 0.15s, filter 0.15s;
+}
+.rel-group.highlighted .rel-line {
+    stroke-width: 3;
+    filter: drop-shadow(0 0 4px currentColor);
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
     width: 6px;

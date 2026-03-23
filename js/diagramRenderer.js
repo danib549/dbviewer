@@ -1,7 +1,7 @@
 /**
  * Diagram Renderer Module
  * Renders table nodes on canvas with SVG relationship lines
- * Supports drag, pan, zoom
+ * Supports drag, pan, zoom, hover highlight, focus mode, filtering
  */
 const DiagramRenderer = (() => {
 
@@ -23,6 +23,11 @@ const DiagramRenderer = (() => {
     let dragNode = null;
     let dragOffsetX, dragOffsetY;
     let onTableClick = null;
+
+    // Focus state: when a table is clicked in sidebar, only show its relationships
+    let focusedTable = null;
+    // Filter state
+    let hiddenTypes = new Set();
 
     function init(onTableClickCb) {
         canvas = document.getElementById('canvas');
@@ -50,6 +55,13 @@ const DiagramRenderer = (() => {
 
         // Redraw lines on window resize
         window.addEventListener('resize', () => drawAllLines());
+
+        // Click on empty canvas clears focus
+        container.addEventListener('click', (e) => {
+            if (!e.target.closest('.table-node')) {
+                clearFocus();
+            }
+        });
     }
 
     /**
@@ -70,14 +82,13 @@ const DiagramRenderer = (() => {
             renderTableNode(table, i);
         });
 
-        // Draw lines after DOM is ready with multiple frames for safety
+        // Draw lines after DOM is ready
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 drawAllLines();
             });
         });
 
-        // Update zoom display
         updateZoomLabel();
     }
 
@@ -92,7 +103,6 @@ const DiagramRenderer = (() => {
         const startX = 60;
         const startY = 60;
 
-        // Sort tables by number of relationships (most connected first, center)
         const relCounts = {};
         tables.forEach(t => { relCounts[t.name] = 0; });
         relationships.forEach(r => {
@@ -101,8 +111,6 @@ const DiagramRenderer = (() => {
         });
 
         const sorted = [...tables].sort((a, b) => (relCounts[b.name] || 0) - (relCounts[a.name] || 0));
-
-        // Track cumulative row heights for variable row heights
         const rowHeights = {};
 
         sorted.forEach((table, i) => {
@@ -113,7 +121,6 @@ const DiagramRenderer = (() => {
 
             if (!rowHeights[row]) rowHeights[row] = 0;
 
-            // Calculate Y based on accumulated heights of previous rows
             let yOffset = startY;
             for (let r = 0; r < row; r++) {
                 yOffset += (rowHeights[r] || 200) + 60;
@@ -160,6 +167,13 @@ const DiagramRenderer = (() => {
         header.addEventListener('touchstart', (e) => onTouchDragStart(e, node, table.name), { passive: false });
         node.appendChild(header);
 
+        // Click header to focus on this table's relationships
+        header.addEventListener('click', (e) => {
+            if (dragNode) return; // don't focus during drag
+            e.stopPropagation();
+            setFocus(table.name);
+        });
+
         // Columns
         const colContainer = document.createElement('div');
         colContainer.className = 'table-node-columns';
@@ -194,7 +208,10 @@ const DiagramRenderer = (() => {
         node.appendChild(colContainer);
 
         node.addEventListener('dblclick', (e) => {
-            if (e.target.closest('.table-node-header')) return;
+            if (e.target.closest('.table-node-header')) {
+                if (onTableClick) onTableClick(table);
+                return;
+            }
             if (onTableClick) onTableClick(table);
         });
 
@@ -209,10 +226,64 @@ const DiagramRenderer = (() => {
         return document.getElementById(`tbl-${sanitizeId(tableName)}`);
     }
 
+    // === FOCUS MODE ===
+    function setFocus(tableName) {
+        if (focusedTable === tableName) {
+            clearFocus();
+            return;
+        }
+        focusedTable = tableName;
+        applyFocusDimming();
+        drawAllLines();
+    }
+
+    function clearFocus() {
+        if (!focusedTable) return;
+        focusedTable = null;
+        // Remove all dim/focus classes
+        canvas.querySelectorAll('.table-node').forEach(n => {
+            n.classList.remove('dimmed', 'focused');
+        });
+        drawAllLines();
+    }
+
+    function applyFocusDimming() {
+        if (!focusedTable) return;
+
+        // Find all tables connected to the focused table
+        const connectedTables = new Set([focusedTable]);
+        relationships.forEach(r => {
+            if (r.fromTable === focusedTable) connectedTables.add(r.toTable);
+            if (r.toTable === focusedTable) connectedTables.add(r.fromTable);
+        });
+
+        canvas.querySelectorAll('.table-node').forEach(n => {
+            const tName = n.dataset.table;
+            if (tName === focusedTable) {
+                n.classList.add('focused');
+                n.classList.remove('dimmed');
+            } else if (connectedTables.has(tName)) {
+                n.classList.remove('dimmed', 'focused');
+            } else {
+                n.classList.add('dimmed');
+                n.classList.remove('focused');
+            }
+        });
+    }
+
+    // === FILTER ===
+    function setHiddenTypes(types) {
+        hiddenTypes = new Set(types);
+        drawAllLines();
+    }
+
     // === DRAG ===
+    let wasDragged = false;
+
     function onDragStart(e, node, tableName) {
         if (e.button !== 0) return;
         e.stopPropagation();
+        wasDragged = false;
         dragNode = { el: node, name: tableName };
         const rect = node.getBoundingClientRect();
         dragOffsetX = (e.clientX - rect.left) / scale;
@@ -225,6 +296,7 @@ const DiagramRenderer = (() => {
         if (e.touches.length !== 1) return;
         e.preventDefault();
         e.stopPropagation();
+        wasDragged = false;
         const touch = e.touches[0];
         dragNode = { el: node, name: tableName };
         const rect = node.getBoundingClientRect();
@@ -246,6 +318,7 @@ const DiagramRenderer = (() => {
 
     function onMouseMove(e) {
         if (dragNode) {
+            wasDragged = true;
             const canvasRect = container.getBoundingClientRect();
             const newX = (e.clientX - canvasRect.left - panX) / scale - dragOffsetX;
             const newY = (e.clientY - canvasRect.top - panY) / scale - dragOffsetY;
@@ -266,6 +339,10 @@ const DiagramRenderer = (() => {
         if (dragNode) {
             dragNode.el.style.zIndex = '';
             dragNode.el.classList.remove('highlighted');
+            // If user dragged, don't trigger focus
+            if (wasDragged) {
+                // prevent the click event from firing focus
+            }
             dragNode = null;
         }
         if (isPanning) {
@@ -286,6 +363,7 @@ const DiagramRenderer = (() => {
     function onTouchMove(e) {
         if (dragNode && e.touches.length === 1) {
             e.preventDefault();
+            wasDragged = true;
             const touch = e.touches[0];
             const canvasRect = container.getBoundingClientRect();
             const newX = (touch.clientX - canvasRect.left - panX) / scale - dragOffsetX;
@@ -380,71 +458,97 @@ const DiagramRenderer = (() => {
     }
 
     // === SVG LINES ===
-    // SVG layer is OUTSIDE the canvas transform, so we need to convert
-    // canvas-local coordinates to screen-relative coordinates for the SVG
     function drawAllLines() {
         svgLayer.innerHTML = '';
 
         if (relationships.length === 0) return;
 
+        // Determine which relationships are "active" (related to focused table)
+        const activeRels = new Set();
+        if (focusedTable) {
+            relationships.forEach(r => {
+                if (r.fromTable === focusedTable || r.toTable === focusedTable) {
+                    activeRels.add(r.id);
+                }
+            });
+        }
+
+        // Separate lines into offset groups to avoid overlap between same two tables
+        const pairOffsets = {};
+
         relationships.forEach(rel => {
-            drawLine(rel);
+            // Skip filtered types
+            if (hiddenTypes.has(rel.type)) return;
+
+            // Calculate offset for parallel lines between same table pair
+            const pairKey = [rel.fromTable, rel.toTable].sort().join('::');
+            if (!pairOffsets[pairKey]) pairOffsets[pairKey] = 0;
+            const offset = pairOffsets[pairKey];
+            pairOffsets[pairKey]++;
+
+            const isActive = !focusedTable || activeRels.has(rel.id);
+            drawLine(rel, isActive, offset);
         });
     }
 
-    function drawLine(rel) {
+    function drawLine(rel, isActive, parallelOffset) {
         const fromNode = getNodeElement(rel.fromTable);
         const toNode = getNodeElement(rel.toTable);
         if (!fromNode || !toNode) return;
 
-        // Find the specific column rows
         const fromColRow = fromNode.querySelector(`[data-column="${CSS.escape(rel.fromColumn)}"]`);
         const toColRow = toNode.querySelector(`[data-column="${CSS.escape(rel.toColumn)}"]`);
 
-        // Get anchor points using direct position calculation (canvas-local coordinates)
         const fromPos = getAnchorPoint(fromNode, fromColRow, toNode);
         const toPos = getAnchorPoint(toNode, toColRow, fromNode);
 
-        // Convert canvas-local coords to SVG container coords
-        const fromScreen = canvasToContainer(fromPos.x, fromPos.y);
-        const toScreen = canvasToContainer(toPos.x, toPos.y);
+        // Apply small vertical offset for parallel lines between same tables
+        const yShift = parallelOffset * 12;
+        const fromScreen = canvasToContainer(fromPos.x, fromPos.y + yShift);
+        const toScreen = canvasToContainer(toPos.x, toPos.y + yShift);
 
-        // Determine color based on relationship
         const color = rel.type === '1:1' ? '#22c55e' : rel.type === 'N:M' ? '#f0b429' : '#4da6ff';
 
-        // Draw curved path
+        // Create a group for this relationship
+        const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        group.setAttribute('class', `rel-group${isActive ? '' : ' dimmed'}`);
+        group.dataset.relId = rel.id;
+        group.dataset.fromTable = rel.fromTable;
+        group.dataset.toTable = rel.toTable;
+
+        // Curved path
         const controlOffset = Math.max(50, Math.min(Math.abs(toScreen.x - fromScreen.x) * 0.4, 180));
         const cp1x = fromPos.side === 'right' ? fromScreen.x + controlOffset : fromScreen.x - controlOffset;
         const cp2x = toPos.side === 'right' ? toScreen.x + controlOffset : toScreen.x - controlOffset;
-
         const d = `M ${fromScreen.x} ${fromScreen.y} C ${cp1x} ${fromScreen.y}, ${cp2x} ${toScreen.y}, ${toScreen.x} ${toScreen.y}`;
 
-        // Main visible path
+        // Main line
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         path.setAttribute('d', d);
         path.setAttribute('class', 'rel-line');
         path.setAttribute('stroke', color);
         path.setAttribute('fill', 'none');
         path.setAttribute('stroke-width', '2');
-        svgLayer.appendChild(path);
+        path.setAttribute('opacity', isActive ? '0.7' : '0.5');
+        group.appendChild(path);
 
-        // Wider invisible path for hover
+        // Wider invisible hover path
         const hoverPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         hoverPath.setAttribute('d', d);
-        hoverPath.setAttribute('class', 'rel-line-hover');
         hoverPath.setAttribute('stroke', 'transparent');
-        hoverPath.setAttribute('stroke-width', '12');
+        hoverPath.setAttribute('stroke-width', '14');
         hoverPath.setAttribute('fill', 'none');
         hoverPath.style.pointerEvents = 'stroke';
         hoverPath.style.cursor = 'pointer';
-        svgLayer.appendChild(hoverPath);
+        group.appendChild(hoverPath);
 
-        // Relationship label at midpoint
+        // Label at midpoint
         const midX = (fromScreen.x + toScreen.x) / 2;
         const midY = (fromScreen.y + toScreen.y) / 2;
 
         const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        const textWidth = rel.type.length * 8 + 10;
+        const label = rel.type + (rel.confidence ? ` ${rel.confidence}%` : '');
+        const textWidth = label.length * 7 + 10;
         bg.setAttribute('x', midX - textWidth / 2);
         bg.setAttribute('y', midY - 10);
         bg.setAttribute('width', textWidth);
@@ -453,7 +557,8 @@ const DiagramRenderer = (() => {
         bg.setAttribute('stroke', color);
         bg.setAttribute('stroke-width', '1');
         bg.setAttribute('rx', '4');
-        svgLayer.appendChild(bg);
+        bg.setAttribute('opacity', isActive ? '1' : '0.4');
+        group.appendChild(bg);
 
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         text.setAttribute('x', midX);
@@ -462,42 +567,63 @@ const DiagramRenderer = (() => {
         text.setAttribute('class', 'rel-label');
         text.setAttribute('fill', color);
         text.setAttribute('font-size', '11');
-        text.textContent = rel.type;
-        svgLayer.appendChild(text);
+        text.textContent = label;
+        group.appendChild(text);
 
-        // Cardinality markers near endpoints
-        const fLabel = rel.type === '1:1' ? '1' : (rel.type === 'N:M' ? 'N' : 'N');
+        // Cardinality markers
+        const fLabel = rel.type === '1:1' ? '1' : 'N';
         const tLabel = rel.type === 'N:M' ? 'M' : '1';
-        drawMarker(fromScreen.x, fromScreen.y, fromPos.side, fLabel, color);
-        drawMarker(toScreen.x, toScreen.y, toPos.side, tLabel, color);
+        appendMarker(group, fromScreen.x, fromScreen.y, fromPos.side, fLabel, color);
+        appendMarker(group, toScreen.x, toScreen.y, toPos.side, tLabel, color);
+
+        // Hover interactions - highlight this line + connected tables
+        hoverPath.addEventListener('mouseenter', () => {
+            group.classList.add('highlighted');
+            group.classList.remove('dimmed');
+            path.setAttribute('opacity', '1');
+
+            // Highlight connected tables
+            const fn = getNodeElement(rel.fromTable);
+            const tn = getNodeElement(rel.toTable);
+            if (fn) fn.classList.add('highlighted');
+            if (tn) tn.classList.add('highlighted');
+
+            // Highlight connected column rows
+            if (fromColRow) fromColRow.style.background = 'rgba(77, 166, 255, 0.25)';
+            if (toColRow) toColRow.style.background = 'rgba(240, 180, 41, 0.25)';
+        });
+
+        hoverPath.addEventListener('mouseleave', () => {
+            group.classList.remove('highlighted');
+            if (!isActive && focusedTable) group.classList.add('dimmed');
+            path.setAttribute('opacity', isActive ? '0.7' : '0.5');
+
+            const fn = getNodeElement(rel.fromTable);
+            const tn = getNodeElement(rel.toTable);
+            if (fn) fn.classList.remove('highlighted');
+            if (tn) tn.classList.remove('highlighted');
+
+            if (fromColRow) fromColRow.style.background = '';
+            if (toColRow) toColRow.style.background = '';
+        });
+
+        svgLayer.appendChild(group);
     }
 
-    /**
-     * Get anchor point for a column row on a table node (in canvas-local coordinates)
-     */
     function getAnchorPoint(node, colRow, otherNode) {
         const nodeX = parseFloat(node.style.left);
         const nodeY = parseFloat(node.style.top);
         const nodeW = node.offsetWidth;
-        const nodeH = node.offsetHeight;
-
         const otherX = parseFloat(otherNode.style.left);
         const otherW = otherNode.offsetWidth;
 
-        // Decide which side the connector exits from
-        const nodeCenterX = nodeX + nodeW / 2;
-        const otherCenterX = otherX + otherW / 2;
-        const exitRight = nodeCenterX < otherCenterX;
+        const exitRight = (nodeX + nodeW / 2) < (otherX + otherW / 2);
 
         let y;
         if (colRow) {
-            // Calculate Y position of the column row relative to the node
-            const colOffsetTop = colRow.offsetTop;
-            const colHeight = colRow.offsetHeight;
-            y = nodeY + colOffsetTop + colHeight / 2;
+            y = nodeY + colRow.offsetTop + colRow.offsetHeight / 2;
         } else {
-            // Fallback: center of the node
-            y = nodeY + nodeH / 2;
+            y = nodeY + node.offsetHeight / 2;
         }
 
         return {
@@ -507,10 +633,6 @@ const DiagramRenderer = (() => {
         };
     }
 
-    /**
-     * Convert canvas-local coordinates to container-relative coordinates
-     * (accounting for pan and scale transforms)
-     */
     function canvasToContainer(cx, cy) {
         return {
             x: cx * scale + panX,
@@ -518,7 +640,7 @@ const DiagramRenderer = (() => {
         };
     }
 
-    function drawMarker(x, y, side, label, color) {
+    function appendMarker(group, x, y, side, label, color) {
         const offset = side === 'right' ? 14 : -14;
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         text.setAttribute('x', x + offset);
@@ -529,25 +651,23 @@ const DiagramRenderer = (() => {
         text.setAttribute('fill', color);
         text.setAttribute('opacity', '0.8');
         text.textContent = label;
-        svgLayer.appendChild(text);
+        group.appendChild(text);
     }
 
     /**
-     * Highlight a table node
+     * Highlight a table and focus on its relationships
      */
     function highlightTable(tableName) {
-        canvas.querySelectorAll('.table-node').forEach(n => n.classList.remove('highlighted'));
-        const node = getNodeElement(tableName);
-        if (node) {
-            node.classList.add('highlighted');
-            const pos = positions[tableName];
-            if (pos) {
-                const containerRect = container.getBoundingClientRect();
-                panX = containerRect.width / 2 - pos.x * scale;
-                panY = containerRect.height / 2 - pos.y * scale;
-                applyTransform();
-                drawAllLines();
-            }
+        setFocus(tableName);
+
+        // Pan to center the table
+        const pos = positions[tableName];
+        if (pos) {
+            const containerRect = container.getBoundingClientRect();
+            panX = containerRect.width / 2 - pos.x * scale;
+            panY = containerRect.height / 2 - pos.y * scale;
+            applyTransform();
+            drawAllLines();
         }
     }
 
@@ -579,5 +699,8 @@ const DiagramRenderer = (() => {
         fitToScreen,
         getPositions,
         resetPositions,
+        setFocus,
+        clearFocus,
+        setHiddenTypes,
     };
 })();

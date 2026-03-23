@@ -106,6 +106,18 @@ const App = (() => {
         document.getElementById('btn-save-relationship').addEventListener('click', saveRelationship);
         document.getElementById('btn-auto-detect').addEventListener('click', runAutoDetect);
 
+        // Filter checkboxes
+        document.getElementById('filter-1n').addEventListener('change', updateTypeFilters);
+        document.getElementById('filter-11').addEventListener('change', updateTypeFilters);
+        document.getElementById('filter-nm').addEventListener('change', updateTypeFilters);
+        document.getElementById('btn-show-all').addEventListener('click', () => {
+            DiagramRenderer.clearFocus();
+            document.getElementById('filter-1n').checked = true;
+            document.getElementById('filter-11').checked = true;
+            document.getElementById('filter-nm').checked = true;
+            updateTypeFilters();
+        });
+
         // Add more CSVs
         const addCsvInput = document.getElementById('add-csv-input');
         document.getElementById('btn-add-csv').addEventListener('click', () => addCsvInput.click());
@@ -276,6 +288,15 @@ const App = (() => {
         renderRelationshipList();
         DiagramRenderer.render(tables, relationships);
         document.getElementById('add-rel-modal').classList.remove('active');
+    }
+
+    // === Type Filters ===
+    function updateTypeFilters() {
+        const hidden = [];
+        if (!document.getElementById('filter-1n').checked) hidden.push('1:N');
+        if (!document.getElementById('filter-11').checked) hidden.push('1:1');
+        if (!document.getElementById('filter-nm').checked) hidden.push('N:M');
+        DiagramRenderer.setHiddenTypes(hidden);
     }
 
     // === Auto Detect (deep scan) ===
