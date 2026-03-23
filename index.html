@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DB Viewer - Database Relationship Visualizer</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <!-- Upload Screen -->
+    <div id="upload-screen" class="screen active">
+        <div class="upload-container">
+            <h1>DB Relationship Visualizer</h1>
+            <p class="subtitle">Drop your SQL Server CSV exports to visualize table relationships</p>
+            <div id="drop-zone" class="drop-zone">
+                <div class="drop-zone-icon">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                </div>
+                <p class="drop-zone-text">Drag & drop CSV files here</p>
+                <p class="drop-zone-hint">or click to browse</p>
+                <input type="file" id="file-input" multiple accept=".csv" hidden>
+            </div>
+            <div id="file-list" class="file-list"></div>
+            <button id="btn-visualize" class="btn-primary" disabled>Visualize Relationships</button>
+        </div>
+    </div>
+
+    <!-- Diagram Screen -->
+    <div id="diagram-screen" class="screen">
+        <!-- Toolbar -->
+        <div class="toolbar">
+            <div class="toolbar-left">
+                <button id="btn-back" class="toolbar-btn" title="Back to upload">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    </svg>
+                </button>
+                <h2 class="toolbar-title">DB Viewer</h2>
+                <span id="table-count" class="badge"></span>
+            </div>
+            <div class="toolbar-center">
+                <button id="btn-zoom-in" class="toolbar-btn" title="Zoom in">+</button>
+                <span id="zoom-level" class="zoom-label">100%</span>
+                <button id="btn-zoom-out" class="toolbar-btn" title="Zoom out">-</button>
+                <button id="btn-zoom-fit" class="toolbar-btn" title="Fit to screen">Fit</button>
+            </div>
+            <div class="toolbar-right">
+                <button id="btn-add-csv" class="toolbar-btn" title="Add more CSV files">+ Add CSV</button>
+                <button id="btn-export-sql" class="toolbar-btn" title="Export SQL DDL">Export SQL</button>
+                <button id="btn-export-png" class="toolbar-btn" title="Export as PNG">Export PNG</button>
+            </div>
+        </div>
+
+        <div class="main-layout">
+            <!-- Sidebar -->
+            <div id="sidebar" class="sidebar">
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Tables</h3>
+                    <ul id="table-list" class="table-list"></ul>
+                </div>
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Relationships <span id="rel-count" class="badge-sm"></span></h3>
+                    <ul id="relationship-list" class="relationship-list"></ul>
+                </div>
+                <div class="sidebar-section">
+                    <button id="btn-add-relationship" class="btn-secondary">+ Add Relationship</button>
+                </div>
+            </div>
+
+            <!-- Canvas -->
+            <div id="canvas-container" class="canvas-container">
+                <div id="canvas" class="canvas">
+                    <svg id="svg-lines" class="svg-overlay"></svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Preview Modal -->
+    <div id="data-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title"></h3>
+                <div class="modal-header-right">
+                    <input type="text" id="modal-search" class="modal-search" placeholder="Search data...">
+                    <button id="modal-close" class="modal-close">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div id="modal-stats" class="modal-stats"></div>
+                <div id="modal-table-wrap" class="modal-table-wrap">
+                    <table id="modal-table" class="data-table"></table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Relationship Modal -->
+    <div id="add-rel-modal" class="modal">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3>Add Relationship</h3>
+                <button class="modal-close" onclick="document.getElementById('add-rel-modal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>From Table</label>
+                    <select id="rel-from-table" class="form-select"></select>
+                </div>
+                <div class="form-group">
+                    <label>From Column</label>
+                    <select id="rel-from-column" class="form-select"></select>
+                </div>
+                <div class="form-group">
+                    <label>To Table</label>
+                    <select id="rel-to-table" class="form-select"></select>
+                </div>
+                <div class="form-group">
+                    <label>To Column</label>
+                    <select id="rel-to-column" class="form-select"></select>
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="rel-type" class="form-select">
+                        <option value="1:N">One to Many (1:N)</option>
+                        <option value="1:1">One to One (1:1)</option>
+                        <option value="N:M">Many to Many (N:M)</option>
+                    </select>
+                </div>
+                <button id="btn-save-relationship" class="btn-primary" style="width:100%;margin-top:12px;">Add Relationship</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Additional file input for adding CSVs in diagram view -->
+    <input type="file" id="add-csv-input" multiple accept=".csv" hidden>
+
+    <script src="lib/papaparse.min.js"></script>
+    <script src="js/csvParser.js"></script>
+    <script src="js/relationshipDetector.js"></script>
+    <script src="js/diagramRenderer.js"></script>
+    <script src="js/dataPreview.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
