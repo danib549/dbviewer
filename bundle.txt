@@ -44,6 +44,12 @@
                 <span id="table-count" class="badge"></span>
             </div>
             <div class="toolbar-center">
+                <div class="layout-toggle">
+                    <button id="btn-layout-radial" class="layout-btn active" title="Radial layout: hub tables at center">Radial</button>
+                    <button id="btn-layout-grid" class="layout-btn" title="Grid layout: tables in rows">Grid</button>
+                    <button id="btn-layout-force" class="layout-btn" title="Force layout: physics simulation">Force</button>
+                </div>
+                <span class="toolbar-sep"></span>
                 <button id="btn-zoom-in" class="toolbar-btn" title="Zoom in">+</button>
                 <span id="zoom-level" class="zoom-label">100%</span>
                 <button id="btn-zoom-out" class="toolbar-btn" title="Zoom out">-</button>
@@ -422,6 +428,43 @@ body {
     padding: 1px 6px;
     border-radius: 8px;
 }
+/* Layout Toggle */
+.layout-toggle {
+    display: flex;
+    background: var(--bg-primary);
+    border-radius: var(--radius);
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+.layout-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 5px 12px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all var(--transition);
+    border-right: 1px solid var(--border-color);
+}
+.layout-btn:last-child {
+    border-right: none;
+}
+.layout-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+.layout-btn.active {
+    background: var(--accent);
+    color: white;
+    font-weight: 600;
+}
+.toolbar-sep {
+    width: 1px;
+    height: 24px;
+    background: var(--border-color);
+    margin: 0 4px;
+}
+
 .zoom-label {
     color: var(--text-muted);
     font-size: 0.8rem;
@@ -1690,6 +1733,7 @@ const DataPreview = (() => {
  * Diagram Renderer Module
  * Renders table nodes on canvas with SVG relationship lines
  * Supports drag, pan, zoom, hover highlight, focus mode, filtering
+ * Layout options: radial (hub-center), grid, force-directed
  */
 const DiagramRenderer = (() => {
 
@@ -1711,11 +1755,10 @@ const DiagramRenderer = (() => {
     let dragNode = null;
     let dragOffsetX, dragOffsetY;
     let onTableClick = null;
-
-    // Focus state: when a table is clicked in sidebar, only show its relationships
     let focusedTable = null;
-    // Filter state
     let hiddenTypes = new Set();
+    let currentLayout = 'radial'; // 'radial' | 'grid' | 'force'
+    let wasDragged = false;
 
     function init(onTableClickCb) {
         canvas = document.getElementById('canvas');
@@ -1723,86 +1766,205 @@ const DiagramRenderer = (() => {
         container = document.getElementById('canvas-container');
         onTableClick = onTableClickCb;
 
-        // Pan events
         container.addEventListener('mousedown', onPanStart);
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
-
-        // Zoom
         container.addEventListener('wheel', onWheel, { passive: false });
-
-        // Touch support
         container.addEventListener('touchstart', onTouchStart, { passive: false });
         container.addEventListener('touchmove', onTouchMove, { passive: false });
         container.addEventListener('touchend', onTouchEnd);
 
-        // Buttons
         document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(scale + 0.1));
         document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(scale - 0.1));
         document.getElementById('btn-zoom-fit').addEventListener('click', fitToScreen);
 
-        // Redraw lines on window resize
+        // Layout buttons
+        document.getElementById('btn-layout-radial').addEventListener('click', () => switchLayout('radial'));
+        document.getElementById('btn-layout-grid').addEventListener('click', () => switchLayout('grid'));
+        document.getElementById('btn-layout-force').addEventListener('click', () => switchLayout('force'));
+
         window.addEventListener('resize', () => drawAllLines());
 
-        // Click on empty canvas clears focus
         container.addEventListener('click', (e) => {
-            if (!e.target.closest('.table-node')) {
-                clearFocus();
-            }
+            if (!e.target.closest('.table-node')) clearFocus();
         });
     }
 
-    /**
-     * Render all tables and relationships
-     */
-    function render(tbls, rels) {
-        tables = tbls;
-        relationships = rels;
+    // =================== LAYOUT ALGORITHMS ===================
 
-        // Clear canvas (keep SVG layer)
-        canvas.querySelectorAll('.table-node').forEach(n => n.remove());
+    function switchLayout(layoutName) {
+        currentLayout = layoutName;
 
-        // Calculate initial positions
+        // Update button states
+        document.querySelectorAll('.layout-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById('btn-layout-' + layoutName).classList.add('active');
+
+        // Recalculate positions
+        positions = {};
         calculateLayout();
 
-        // Render table nodes
-        tables.forEach((table, i) => {
-            renderTableNode(table, i);
+        // Re-render nodes at new positions
+        canvas.querySelectorAll('.table-node').forEach(n => {
+            const tName = n.dataset.table;
+            if (positions[tName]) {
+                n.style.left = positions[tName].x + 'px';
+                n.style.top = positions[tName].y + 'px';
+            }
         });
 
-        // Draw lines after DOM is ready
+        // Redraw lines + fit
         requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                drawAllLines();
-            });
+            drawAllLines();
+            setTimeout(() => fitToScreen(), 50);
         });
-
-        updateZoomLabel();
     }
 
-    /**
-     * Calculate grid layout for tables
-     */
     function calculateLayout() {
         if (Object.keys(positions).length === tables.length) return;
 
+        switch (currentLayout) {
+            case 'radial': radialLayout(); break;
+            case 'grid': gridLayout(); break;
+            case 'force': forceLayout(); break;
+            default: radialLayout();
+        }
+    }
+
+    /**
+     * Radial layout: hub table at center, BFS rings outward
+     */
+    function radialLayout() {
+        if (tables.length === 0) return;
+
+        // 1. Calculate connectivity scores
+        const connCounts = {};
+        tables.forEach(t => { connCounts[t.name] = 0; });
+        relationships.forEach(r => {
+            if (connCounts[r.fromTable] !== undefined) connCounts[r.fromTable]++;
+            if (connCounts[r.toTable] !== undefined) connCounts[r.toTable]++;
+        });
+
+        // 2. Find hub (most connections)
+        const sorted = [...tables].sort((a, b) => (connCounts[b.name] || 0) - (connCounts[a.name] || 0));
+        const hub = sorted[0];
+
+        // 3. BFS from hub to assign layers
+        const layers = [];
+        const visited = new Set();
+
+        layers[0] = [hub];
+        visited.add(hub.name);
+
+        let currentLayer = 0;
+        while (visited.size < tables.length) {
+            currentLayer++;
+            const nextLayer = [];
+
+            for (const prevTable of (layers[currentLayer - 1] || [])) {
+                relationships.forEach(r => {
+                    let neighbor = null;
+                    if (r.fromTable === prevTable.name && !visited.has(r.toTable)) {
+                        neighbor = tables.find(t => t.name === r.toTable);
+                    }
+                    if (r.toTable === prevTable.name && !visited.has(r.fromTable)) {
+                        neighbor = tables.find(t => t.name === r.fromTable);
+                    }
+                    if (neighbor && !visited.has(neighbor.name)) {
+                        nextLayer.push(neighbor);
+                        visited.add(neighbor.name);
+                    }
+                });
+            }
+
+            // If no new neighbors found but unvisited tables remain, add them
+            if (nextLayer.length === 0) {
+                for (const t of tables) {
+                    if (!visited.has(t.name)) {
+                        nextLayer.push(t);
+                        visited.add(t.name);
+                    }
+                }
+            }
+
+            if (nextLayer.length > 0) {
+                layers[currentLayer] = nextLayer;
+            }
+        }
+
+        // 4. Position in concentric circles
+        const centerX = 600;
+        const centerY = 500;
+        const ringSpacing = 280;
+
+        for (let li = 0; li < layers.length; li++) {
+            const layer = layers[li];
+            if (!layer) continue;
+
+            if (li === 0) {
+                // Hub at center
+                positions[layer[0].name] = { x: centerX, y: centerY };
+                continue;
+            }
+
+            const radius = li * ringSpacing;
+            const count = layer.length;
+
+            // Sort layer tables so connected ones are adjacent
+            const layerSorted = sortLayerByConnections(layer, layers[li - 1] || [], relationships);
+
+            layerSorted.forEach((table, idx) => {
+                const angle = (idx / count) * 2 * Math.PI - Math.PI / 2;
+                positions[table.name] = {
+                    x: centerX + radius * Math.cos(angle),
+                    y: centerY + radius * Math.sin(angle),
+                };
+            });
+        }
+    }
+
+    /**
+     * Sort tables in a layer so that tables connected to the same parent are adjacent
+     */
+    function sortLayerByConnections(layer, prevLayer, rels) {
+        if (prevLayer.length === 0) return layer;
+
+        // For each table in this layer, find which parent it connects to
+        const parentIdx = {};
+        layer.forEach(t => {
+            let bestParent = 0;
+            rels.forEach(r => {
+                const parent = prevLayer.findIndex(p =>
+                    (r.fromTable === t.name && r.toTable === p.name) ||
+                    (r.toTable === t.name && r.fromTable === p.name)
+                );
+                if (parent >= 0) bestParent = parent;
+            });
+            parentIdx[t.name] = bestParent;
+        });
+
+        return [...layer].sort((a, b) => parentIdx[a.name] - parentIdx[b.name]);
+    }
+
+    /**
+     * Grid layout: sorted by connection count, in rows
+     */
+    function gridLayout() {
         const cols = Math.ceil(Math.sqrt(tables.length));
         const spacingX = 300;
         const startX = 60;
         const startY = 60;
 
-        const relCounts = {};
-        tables.forEach(t => { relCounts[t.name] = 0; });
+        const connCounts = {};
+        tables.forEach(t => { connCounts[t.name] = 0; });
         relationships.forEach(r => {
-            relCounts[r.fromTable] = (relCounts[r.fromTable] || 0) + 1;
-            relCounts[r.toTable] = (relCounts[r.toTable] || 0) + 1;
+            if (connCounts[r.fromTable] !== undefined) connCounts[r.fromTable]++;
+            if (connCounts[r.toTable] !== undefined) connCounts[r.toTable]++;
         });
 
-        const sorted = [...tables].sort((a, b) => (relCounts[b.name] || 0) - (relCounts[a.name] || 0));
+        const sorted = [...tables].sort((a, b) => (connCounts[b.name] || 0) - (connCounts[a.name] || 0));
         const rowHeights = {};
 
         sorted.forEach((table, i) => {
-            if (positions[table.name]) return;
             const col = i % cols;
             const row = Math.floor(i / cols);
             const estimatedHeight = 40 + (table.columns.length * 26) + 12;
@@ -1814,18 +1976,104 @@ const DiagramRenderer = (() => {
                 yOffset += (rowHeights[r] || 200) + 60;
             }
 
-            positions[table.name] = {
-                x: startX + col * spacingX,
-                y: yOffset,
-            };
-
+            positions[table.name] = { x: startX + col * spacingX, y: yOffset };
             rowHeights[row] = Math.max(rowHeights[row] || 0, estimatedHeight);
         });
     }
 
     /**
-     * Render a single table node
+     * Force-directed layout: spring physics simulation
      */
+    function forceLayout() {
+        if (tables.length === 0) return;
+
+        const iterations = 80;
+        const springLength = 280;
+        const springK = 0.05;
+        const repulsionK = 8000;
+        const damping = 0.85;
+        const centerGravity = 0.01;
+
+        // Initialize in a circle
+        const cx = 600, cy = 500, initRadius = 300;
+        const vel = {};
+
+        tables.forEach((t, i) => {
+            const angle = (i / tables.length) * 2 * Math.PI;
+            positions[t.name] = {
+                x: cx + initRadius * Math.cos(angle),
+                y: cy + initRadius * Math.sin(angle),
+            };
+            vel[t.name] = { x: 0, y: 0 };
+        });
+
+        for (let iter = 0; iter < iterations; iter++) {
+            const forces = {};
+            tables.forEach(t => { forces[t.name] = { x: 0, y: 0 }; });
+
+            // Repulsion (all pairs)
+            for (let i = 0; i < tables.length; i++) {
+                for (let j = i + 1; j < tables.length; j++) {
+                    const a = tables[i].name, b = tables[j].name;
+                    const dx = positions[b].x - positions[a].x;
+                    const dy = positions[b].y - positions[a].y;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const f = repulsionK / (dist * dist);
+                    const fx = (dx / dist) * f;
+                    const fy = (dy / dist) * f;
+
+                    forces[a].x -= fx; forces[a].y -= fy;
+                    forces[b].x += fx; forces[b].y += fy;
+                }
+            }
+
+            // Attraction (connected pairs)
+            relationships.forEach(r => {
+                if (!positions[r.fromTable] || !positions[r.toTable]) return;
+                const dx = positions[r.toTable].x - positions[r.fromTable].x;
+                const dy = positions[r.toTable].y - positions[r.fromTable].y;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                const f = springK * (dist - springLength);
+                const fx = (dx / dist) * f;
+                const fy = (dy / dist) * f;
+
+                forces[r.fromTable].x += fx; forces[r.fromTable].y += fy;
+                forces[r.toTable].x -= fx; forces[r.toTable].y -= fy;
+            });
+
+            // Center gravity
+            tables.forEach(t => {
+                forces[t.name].x += (cx - positions[t.name].x) * centerGravity;
+                forces[t.name].y += (cy - positions[t.name].y) * centerGravity;
+            });
+
+            // Update
+            tables.forEach(t => {
+                vel[t.name].x = (vel[t.name].x + forces[t.name].x) * damping;
+                vel[t.name].y = (vel[t.name].y + forces[t.name].y) * damping;
+                positions[t.name].x += vel[t.name].x;
+                positions[t.name].y += vel[t.name].y;
+            });
+        }
+    }
+
+    // =================== RENDERING ===================
+
+    function render(tbls, rels) {
+        tables = tbls;
+        relationships = rels;
+
+        canvas.querySelectorAll('.table-node').forEach(n => n.remove());
+        calculateLayout();
+
+        tables.forEach((table, i) => renderTableNode(table, i));
+
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => drawAllLines());
+        });
+        updateZoomLabel();
+    }
+
     function renderTableNode(table, index) {
         const pos = positions[table.name];
         const colorIndex = index % COLORS.length;
@@ -1837,7 +2085,6 @@ const DiagramRenderer = (() => {
         node.style.top = pos.y + 'px';
         node.dataset.table = table.name;
 
-        // Header
         const header = document.createElement('div');
         header.className = 'table-node-header';
         header.innerHTML = `
@@ -1853,16 +2100,13 @@ const DiagramRenderer = (() => {
         `;
         header.addEventListener('mousedown', (e) => onDragStart(e, node, table.name));
         header.addEventListener('touchstart', (e) => onTouchDragStart(e, node, table.name), { passive: false });
-        node.appendChild(header);
-
-        // Click header to focus on this table's relationships
         header.addEventListener('click', (e) => {
-            if (dragNode) return; // don't focus during drag
+            if (wasDragged) return;
             e.stopPropagation();
             setFocus(table.name);
         });
+        node.appendChild(header);
 
-        // Columns
         const colContainer = document.createElement('div');
         colContainer.className = 'table-node-columns';
 
@@ -1875,8 +2119,7 @@ const DiagramRenderer = (() => {
             row.dataset.column = col.name;
             row.dataset.table = table.name;
 
-            let iconClass = '';
-            let iconText = '';
+            let iconClass = '', iconText = '';
             if (col.isPK) { iconClass = 'col-icon pk'; iconText = 'PK'; }
             else if (col.isFK) { iconClass = 'col-icon fk'; iconText = 'FK'; }
 
@@ -1885,41 +2128,22 @@ const DiagramRenderer = (() => {
                 <span class="col-name">${escapeHtml(col.name)}</span>
                 <span class="col-type">${col.type}</span>
             `;
-
-            row.addEventListener('dblclick', () => {
-                if (onTableClick) onTableClick(table);
-            });
-
+            row.addEventListener('dblclick', () => { if (onTableClick) onTableClick(table); });
             colContainer.appendChild(row);
         });
 
         node.appendChild(colContainer);
-
-        node.addEventListener('dblclick', (e) => {
-            if (e.target.closest('.table-node-header')) {
-                if (onTableClick) onTableClick(table);
-                return;
-            }
-            if (onTableClick) onTableClick(table);
-        });
-
+        node.addEventListener('dblclick', () => { if (onTableClick) onTableClick(table); });
         canvas.appendChild(node);
     }
 
-    function sanitizeId(name) {
-        return name.replace(/[^a-zA-Z0-9_-]/g, '_');
-    }
+    function sanitizeId(name) { return name.replace(/[^a-zA-Z0-9_-]/g, '_'); }
+    function getNodeElement(tableName) { return document.getElementById(`tbl-${sanitizeId(tableName)}`); }
 
-    function getNodeElement(tableName) {
-        return document.getElementById(`tbl-${sanitizeId(tableName)}`);
-    }
+    // =================== FOCUS MODE ===================
 
-    // === FOCUS MODE ===
     function setFocus(tableName) {
-        if (focusedTable === tableName) {
-            clearFocus();
-            return;
-        }
+        if (focusedTable === tableName) { clearFocus(); return; }
         focusedTable = tableName;
         applyFocusDimming();
         drawAllLines();
@@ -1928,7 +2152,6 @@ const DiagramRenderer = (() => {
     function clearFocus() {
         if (!focusedTable) return;
         focusedTable = null;
-        // Remove all dim/focus classes
         canvas.querySelectorAll('.table-node').forEach(n => {
             n.classList.remove('dimmed', 'focused');
         });
@@ -1937,36 +2160,23 @@ const DiagramRenderer = (() => {
 
     function applyFocusDimming() {
         if (!focusedTable) return;
-
-        // Find all tables connected to the focused table
-        const connectedTables = new Set([focusedTable]);
+        const connected = new Set([focusedTable]);
         relationships.forEach(r => {
-            if (r.fromTable === focusedTable) connectedTables.add(r.toTable);
-            if (r.toTable === focusedTable) connectedTables.add(r.fromTable);
+            if (r.fromTable === focusedTable) connected.add(r.toTable);
+            if (r.toTable === focusedTable) connected.add(r.fromTable);
         });
 
         canvas.querySelectorAll('.table-node').forEach(n => {
-            const tName = n.dataset.table;
-            if (tName === focusedTable) {
-                n.classList.add('focused');
-                n.classList.remove('dimmed');
-            } else if (connectedTables.has(tName)) {
-                n.classList.remove('dimmed', 'focused');
-            } else {
-                n.classList.add('dimmed');
-                n.classList.remove('focused');
-            }
+            const t = n.dataset.table;
+            if (t === focusedTable) { n.classList.add('focused'); n.classList.remove('dimmed'); }
+            else if (connected.has(t)) { n.classList.remove('dimmed', 'focused'); }
+            else { n.classList.add('dimmed'); n.classList.remove('focused'); }
         });
     }
 
-    // === FILTER ===
-    function setHiddenTypes(types) {
-        hiddenTypes = new Set(types);
-        drawAllLines();
-    }
+    function setHiddenTypes(types) { hiddenTypes = new Set(types); drawAllLines(); }
 
-    // === DRAG ===
-    let wasDragged = false;
+    // =================== DRAG ===================
 
     function onDragStart(e, node, tableName) {
         if (e.button !== 0) return;
@@ -1982,8 +2192,7 @@ const DiagramRenderer = (() => {
 
     function onTouchDragStart(e, node, tableName) {
         if (e.touches.length !== 1) return;
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         wasDragged = false;
         const touch = e.touches[0];
         dragNode = { el: node, name: tableName };
@@ -1994,10 +2203,10 @@ const DiagramRenderer = (() => {
         node.classList.add('highlighted');
     }
 
-    // === PAN ===
+    // =================== PAN ===================
+
     function onPanStart(e) {
-        if (dragNode) return;
-        if (e.target.closest('.table-node')) return;
+        if (dragNode || e.target.closest('.table-node')) return;
         isPanning = true;
         panStartX = e.clientX - panX;
         panStartY = e.clientY - panY;
@@ -2007,12 +2216,12 @@ const DiagramRenderer = (() => {
     function onMouseMove(e) {
         if (dragNode) {
             wasDragged = true;
-            const canvasRect = container.getBoundingClientRect();
-            const newX = (e.clientX - canvasRect.left - panX) / scale - dragOffsetX;
-            const newY = (e.clientY - canvasRect.top - panY) / scale - dragOffsetY;
-            dragNode.el.style.left = newX + 'px';
-            dragNode.el.style.top = newY + 'px';
-            positions[dragNode.name] = { x: newX, y: newY };
+            const r = container.getBoundingClientRect();
+            const nx = (e.clientX - r.left - panX) / scale - dragOffsetX;
+            const ny = (e.clientY - r.top - panY) / scale - dragOffsetY;
+            dragNode.el.style.left = nx + 'px';
+            dragNode.el.style.top = ny + 'px';
+            positions[dragNode.name] = { x: nx, y: ny };
             drawAllLines();
         }
         if (isPanning) {
@@ -2027,16 +2236,9 @@ const DiagramRenderer = (() => {
         if (dragNode) {
             dragNode.el.style.zIndex = '';
             dragNode.el.classList.remove('highlighted');
-            // If user dragged, don't trigger focus
-            if (wasDragged) {
-                // prevent the click event from firing focus
-            }
             dragNode = null;
         }
-        if (isPanning) {
-            isPanning = false;
-            container.classList.remove('grabbing');
-        }
+        if (isPanning) { isPanning = false; container.classList.remove('grabbing'); }
     }
 
     function onTouchStart(e) {
@@ -2050,15 +2252,13 @@ const DiagramRenderer = (() => {
 
     function onTouchMove(e) {
         if (dragNode && e.touches.length === 1) {
-            e.preventDefault();
-            wasDragged = true;
-            const touch = e.touches[0];
-            const canvasRect = container.getBoundingClientRect();
-            const newX = (touch.clientX - canvasRect.left - panX) / scale - dragOffsetX;
-            const newY = (touch.clientY - canvasRect.top - panY) / scale - dragOffsetY;
-            dragNode.el.style.left = newX + 'px';
-            dragNode.el.style.top = newY + 'px';
-            positions[dragNode.name] = { x: newX, y: newY };
+            e.preventDefault(); wasDragged = true;
+            const t = e.touches[0], r = container.getBoundingClientRect();
+            const nx = (t.clientX - r.left - panX) / scale - dragOffsetX;
+            const ny = (t.clientY - r.top - panY) / scale - dragOffsetY;
+            dragNode.el.style.left = nx + 'px';
+            dragNode.el.style.top = ny + 'px';
+            positions[dragNode.name] = { x: nx, y: ny };
             drawAllLines();
         }
         if (isPanning && e.touches.length === 1) {
@@ -2071,146 +2271,94 @@ const DiagramRenderer = (() => {
     }
 
     function onTouchEnd() {
-        if (dragNode) {
-            dragNode.el.style.zIndex = '';
-            dragNode.el.classList.remove('highlighted');
-            dragNode = null;
-        }
+        if (dragNode) { dragNode.el.style.zIndex = ''; dragNode.el.classList.remove('highlighted'); dragNode = null; }
         isPanning = false;
     }
 
-    // === ZOOM ===
+    // =================== ZOOM ===================
+
     function onWheel(e) {
         e.preventDefault();
         const delta = e.deltaY > 0 ? -0.08 : 0.08;
-        const newScale = Math.max(0.2, Math.min(3, scale + delta));
-
-        const rect = container.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-
-        panX = mouseX - (mouseX - panX) * (newScale / scale);
-        panY = mouseY - (mouseY - panY) * (newScale / scale);
-
-        scale = newScale;
-        applyTransform();
-        drawAllLines();
-        updateZoomLabel();
+        const ns = Math.max(0.2, Math.min(3, scale + delta));
+        const r = container.getBoundingClientRect();
+        const mx = e.clientX - r.left, my = e.clientY - r.top;
+        panX = mx - (mx - panX) * (ns / scale);
+        panY = my - (my - panY) * (ns / scale);
+        scale = ns;
+        applyTransform(); drawAllLines(); updateZoomLabel();
     }
 
-    function setZoom(newScale) {
-        scale = Math.max(0.2, Math.min(3, newScale));
-        applyTransform();
-        drawAllLines();
-        updateZoomLabel();
+    function setZoom(ns) {
+        scale = Math.max(0.2, Math.min(3, ns));
+        applyTransform(); drawAllLines(); updateZoomLabel();
     }
 
     function fitToScreen() {
         if (tables.length === 0) return;
-
-        const containerRect = container.getBoundingClientRect();
+        const cr = container.getBoundingClientRect();
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-        canvas.querySelectorAll('.table-node').forEach(node => {
-            const x = parseFloat(node.style.left);
-            const y = parseFloat(node.style.top);
-            const w = node.offsetWidth;
-            const h = node.offsetHeight;
-            minX = Math.min(minX, x);
-            minY = Math.min(minY, y);
-            maxX = Math.max(maxX, x + w);
-            maxY = Math.max(maxY, y + h);
+        canvas.querySelectorAll('.table-node').forEach(n => {
+            const x = parseFloat(n.style.left), y = parseFloat(n.style.top);
+            minX = Math.min(minX, x); minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x + n.offsetWidth); maxY = Math.max(maxY, y + n.offsetHeight);
         });
-
-        const contentW = maxX - minX + 120;
-        const contentH = maxY - minY + 120;
-        const scaleX = containerRect.width / contentW;
-        const scaleY = containerRect.height / contentH;
-        scale = Math.min(scaleX, scaleY, 1.5);
-        scale = Math.max(0.2, Math.min(2, scale));
-
-        panX = (containerRect.width - contentW * scale) / 2 - minX * scale + 60;
-        panY = (containerRect.height - contentH * scale) / 2 - minY * scale + 60;
-
-        applyTransform();
-        drawAllLines();
-        updateZoomLabel();
+        const cw = maxX - minX + 120, ch = maxY - minY + 120;
+        scale = Math.max(0.2, Math.min(Math.min(cr.width / cw, cr.height / ch), 1.5));
+        panX = (cr.width - cw * scale) / 2 - minX * scale + 60;
+        panY = (cr.height - ch * scale) / 2 - minY * scale + 60;
+        applyTransform(); drawAllLines(); updateZoomLabel();
     }
 
-    function applyTransform() {
-        canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
-    }
+    function applyTransform() { canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`; }
+    function updateZoomLabel() { document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%'; }
 
-    function updateZoomLabel() {
-        document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
-    }
+    // =================== SVG LINES ===================
 
-    // === SVG LINES ===
     function drawAllLines() {
         svgLayer.innerHTML = '';
-
         if (relationships.length === 0) return;
 
-        // Determine which relationships are "active" (related to focused table)
         const activeRels = new Set();
         if (focusedTable) {
             relationships.forEach(r => {
-                if (r.fromTable === focusedTable || r.toTable === focusedTable) {
-                    activeRels.add(r.id);
-                }
+                if (r.fromTable === focusedTable || r.toTable === focusedTable) activeRels.add(r.id);
             });
         }
 
-        // Separate lines into offset groups to avoid overlap between same two tables
         const pairOffsets = {};
-
         relationships.forEach(rel => {
-            // Skip filtered types
             if (hiddenTypes.has(rel.type)) return;
-
-            // Calculate offset for parallel lines between same table pair
-            const pairKey = [rel.fromTable, rel.toTable].sort().join('::');
-            if (!pairOffsets[pairKey]) pairOffsets[pairKey] = 0;
-            const offset = pairOffsets[pairKey];
-            pairOffsets[pairKey]++;
-
+            const pk = [rel.fromTable, rel.toTable].sort().join('::');
+            if (!pairOffsets[pk]) pairOffsets[pk] = 0;
+            const offset = pairOffsets[pk]++;
             const isActive = !focusedTable || activeRels.has(rel.id);
             drawLine(rel, isActive, offset);
         });
     }
 
     function drawLine(rel, isActive, parallelOffset) {
-        const fromNode = getNodeElement(rel.fromTable);
-        const toNode = getNodeElement(rel.toTable);
-        if (!fromNode || !toNode) return;
+        const fn = getNodeElement(rel.fromTable), tn = getNodeElement(rel.toTable);
+        if (!fn || !tn) return;
 
-        const fromColRow = fromNode.querySelector(`[data-column="${CSS.escape(rel.fromColumn)}"]`);
-        const toColRow = toNode.querySelector(`[data-column="${CSS.escape(rel.toColumn)}"]`);
+        const fcr = fn.querySelector(`[data-column="${CSS.escape(rel.fromColumn)}"]`);
+        const tcr = tn.querySelector(`[data-column="${CSS.escape(rel.toColumn)}"]`);
+        const fp = getAnchorPoint(fn, fcr, tn);
+        const tp = getAnchorPoint(tn, tcr, fn);
 
-        const fromPos = getAnchorPoint(fromNode, fromColRow, toNode);
-        const toPos = getAnchorPoint(toNode, toColRow, fromNode);
-
-        // Apply small vertical offset for parallel lines between same tables
         const yShift = parallelOffset * 12;
-        const fromScreen = canvasToContainer(fromPos.x, fromPos.y + yShift);
-        const toScreen = canvasToContainer(toPos.x, toPos.y + yShift);
-
+        const fs = canvasToContainer(fp.x, fp.y + yShift);
+        const ts = canvasToContainer(tp.x, tp.y + yShift);
         const color = rel.type === '1:1' ? '#22c55e' : rel.type === 'N:M' ? '#f0b429' : '#4da6ff';
 
-        // Create a group for this relationship
         const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
         group.setAttribute('class', `rel-group${isActive ? '' : ' dimmed'}`);
-        group.dataset.relId = rel.id;
-        group.dataset.fromTable = rel.fromTable;
-        group.dataset.toTable = rel.toTable;
 
-        // Curved path
-        const controlOffset = Math.max(50, Math.min(Math.abs(toScreen.x - fromScreen.x) * 0.4, 180));
-        const cp1x = fromPos.side === 'right' ? fromScreen.x + controlOffset : fromScreen.x - controlOffset;
-        const cp2x = toPos.side === 'right' ? toScreen.x + controlOffset : toScreen.x - controlOffset;
-        const d = `M ${fromScreen.x} ${fromScreen.y} C ${cp1x} ${fromScreen.y}, ${cp2x} ${toScreen.y}, ${toScreen.x} ${toScreen.y}`;
+        const co = Math.max(50, Math.min(Math.abs(ts.x - fs.x) * 0.4, 180));
+        const c1 = fp.side === 'right' ? fs.x + co : fs.x - co;
+        const c2 = tp.side === 'right' ? ts.x + co : ts.x - co;
+        const d = `M ${fs.x} ${fs.y} C ${c1} ${fs.y}, ${c2} ${ts.y}, ${ts.x} ${ts.y}`;
 
-        // Main line
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         path.setAttribute('d', d);
         path.setAttribute('class', 'rel-line');
@@ -2220,176 +2368,103 @@ const DiagramRenderer = (() => {
         path.setAttribute('opacity', isActive ? '0.7' : '0.5');
         group.appendChild(path);
 
-        // Wider invisible hover path
-        const hoverPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        hoverPath.setAttribute('d', d);
-        hoverPath.setAttribute('stroke', 'transparent');
-        hoverPath.setAttribute('stroke-width', '14');
-        hoverPath.setAttribute('fill', 'none');
-        hoverPath.style.pointerEvents = 'stroke';
-        hoverPath.style.cursor = 'pointer';
-        group.appendChild(hoverPath);
+        const hp = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        hp.setAttribute('d', d);
+        hp.setAttribute('stroke', 'transparent');
+        hp.setAttribute('stroke-width', '14');
+        hp.setAttribute('fill', 'none');
+        hp.style.pointerEvents = 'stroke';
+        hp.style.cursor = 'pointer';
+        group.appendChild(hp);
 
-        // Label at midpoint
-        const midX = (fromScreen.x + toScreen.x) / 2;
-        const midY = (fromScreen.y + toScreen.y) / 2;
+        // Label
+        const mx = (fs.x + ts.x) / 2, my = (fs.y + ts.y) / 2;
+        const label = rel.type + (rel.confidence ? ` ${rel.confidence}%` : '');
+        const tw = label.length * 7 + 10;
 
         const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        const label = rel.type + (rel.confidence ? ` ${rel.confidence}%` : '');
-        const textWidth = label.length * 7 + 10;
-        bg.setAttribute('x', midX - textWidth / 2);
-        bg.setAttribute('y', midY - 10);
-        bg.setAttribute('width', textWidth);
-        bg.setAttribute('height', 20);
-        bg.setAttribute('fill', '#1a1b2e');
-        bg.setAttribute('stroke', color);
-        bg.setAttribute('stroke-width', '1');
-        bg.setAttribute('rx', '4');
+        bg.setAttribute('x', mx - tw / 2); bg.setAttribute('y', my - 10);
+        bg.setAttribute('width', tw); bg.setAttribute('height', 20);
+        bg.setAttribute('fill', '#1a1b2e'); bg.setAttribute('stroke', color);
+        bg.setAttribute('stroke-width', '1'); bg.setAttribute('rx', '4');
         bg.setAttribute('opacity', isActive ? '1' : '0.4');
         group.appendChild(bg);
 
-        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', midX);
-        text.setAttribute('y', midY + 4);
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('class', 'rel-label');
-        text.setAttribute('fill', color);
-        text.setAttribute('font-size', '11');
-        text.textContent = label;
-        group.appendChild(text);
+        const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        txt.setAttribute('x', mx); txt.setAttribute('y', my + 4);
+        txt.setAttribute('text-anchor', 'middle'); txt.setAttribute('class', 'rel-label');
+        txt.setAttribute('fill', color); txt.setAttribute('font-size', '11');
+        txt.textContent = label;
+        group.appendChild(txt);
 
-        // Cardinality markers
-        const fLabel = rel.type === '1:1' ? '1' : 'N';
-        const tLabel = rel.type === 'N:M' ? 'M' : '1';
-        appendMarker(group, fromScreen.x, fromScreen.y, fromPos.side, fLabel, color);
-        appendMarker(group, toScreen.x, toScreen.y, toPos.side, tLabel, color);
+        // Cardinality
+        appendMarker(group, fs.x, fs.y, fp.side, rel.type === '1:1' ? '1' : 'N', color);
+        appendMarker(group, ts.x, ts.y, tp.side, rel.type === 'N:M' ? 'M' : '1', color);
 
-        // Hover interactions - highlight this line + connected tables
-        hoverPath.addEventListener('mouseenter', () => {
-            group.classList.add('highlighted');
-            group.classList.remove('dimmed');
+        // Hover
+        hp.addEventListener('mouseenter', () => {
+            group.classList.add('highlighted'); group.classList.remove('dimmed');
             path.setAttribute('opacity', '1');
-
-            // Highlight connected tables
-            const fn = getNodeElement(rel.fromTable);
-            const tn = getNodeElement(rel.toTable);
             if (fn) fn.classList.add('highlighted');
             if (tn) tn.classList.add('highlighted');
-
-            // Highlight connected column rows
-            if (fromColRow) fromColRow.style.background = 'rgba(77, 166, 255, 0.25)';
-            if (toColRow) toColRow.style.background = 'rgba(240, 180, 41, 0.25)';
+            if (fcr) fcr.style.background = 'rgba(77, 166, 255, 0.25)';
+            if (tcr) tcr.style.background = 'rgba(240, 180, 41, 0.25)';
         });
-
-        hoverPath.addEventListener('mouseleave', () => {
+        hp.addEventListener('mouseleave', () => {
             group.classList.remove('highlighted');
             if (!isActive && focusedTable) group.classList.add('dimmed');
             path.setAttribute('opacity', isActive ? '0.7' : '0.5');
-
-            const fn = getNodeElement(rel.fromTable);
-            const tn = getNodeElement(rel.toTable);
             if (fn) fn.classList.remove('highlighted');
             if (tn) tn.classList.remove('highlighted');
-
-            if (fromColRow) fromColRow.style.background = '';
-            if (toColRow) toColRow.style.background = '';
+            if (fcr) fcr.style.background = '';
+            if (tcr) tcr.style.background = '';
         });
 
         svgLayer.appendChild(group);
     }
 
     function getAnchorPoint(node, colRow, otherNode) {
-        const nodeX = parseFloat(node.style.left);
-        const nodeY = parseFloat(node.style.top);
-        const nodeW = node.offsetWidth;
-        const otherX = parseFloat(otherNode.style.left);
-        const otherW = otherNode.offsetWidth;
-
-        const exitRight = (nodeX + nodeW / 2) < (otherX + otherW / 2);
-
-        let y;
-        if (colRow) {
-            y = nodeY + colRow.offsetTop + colRow.offsetHeight / 2;
-        } else {
-            y = nodeY + node.offsetHeight / 2;
-        }
-
-        return {
-            x: exitRight ? nodeX + nodeW : nodeX,
-            y: y,
-            side: exitRight ? 'right' : 'left'
-        };
+        const nx = parseFloat(node.style.left), ny = parseFloat(node.style.top);
+        const nw = node.offsetWidth;
+        const ox = parseFloat(otherNode.style.left), ow = otherNode.offsetWidth;
+        const exitRight = (nx + nw / 2) < (ox + ow / 2);
+        const y = colRow ? ny + colRow.offsetTop + colRow.offsetHeight / 2 : ny + node.offsetHeight / 2;
+        return { x: exitRight ? nx + nw : nx, y, side: exitRight ? 'right' : 'left' };
     }
 
-    function canvasToContainer(cx, cy) {
-        return {
-            x: cx * scale + panX,
-            y: cy * scale + panY
-        };
-    }
+    function canvasToContainer(cx, cy) { return { x: cx * scale + panX, y: cy * scale + panY }; }
 
     function appendMarker(group, x, y, side, label, color) {
-        const offset = side === 'right' ? 14 : -14;
-        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', x + offset);
-        text.setAttribute('y', y - 10);
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('font-size', '10');
-        text.setAttribute('font-family', 'monospace');
-        text.setAttribute('fill', color);
-        text.setAttribute('opacity', '0.8');
-        text.textContent = label;
-        group.appendChild(text);
+        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('x', x + (side === 'right' ? 14 : -14));
+        t.setAttribute('y', y - 10);
+        t.setAttribute('text-anchor', 'middle');
+        t.setAttribute('font-size', '10'); t.setAttribute('font-family', 'monospace');
+        t.setAttribute('fill', color); t.setAttribute('opacity', '0.8');
+        t.textContent = label;
+        group.appendChild(t);
     }
 
-    /**
-     * Highlight a table and focus on its relationships
-     */
     function highlightTable(tableName) {
         setFocus(tableName);
-
-        // Pan to center the table
         const pos = positions[tableName];
         if (pos) {
-            const containerRect = container.getBoundingClientRect();
-            panX = containerRect.width / 2 - pos.x * scale;
-            panY = containerRect.height / 2 - pos.y * scale;
-            applyTransform();
-            drawAllLines();
+            const cr = container.getBoundingClientRect();
+            panX = cr.width / 2 - pos.x * scale;
+            panY = cr.height / 2 - pos.y * scale;
+            applyTransform(); drawAllLines();
         }
     }
 
-    function updateRelationships(rels) {
-        relationships = rels;
-        drawAllLines();
-    }
-
-    function getPositions() {
-        return positions;
-    }
-
-    function resetPositions() {
-        positions = {};
-    }
-
-    function escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
+    function updateRelationships(rels) { relationships = rels; drawAllLines(); }
+    function getPositions() { return positions; }
+    function resetPositions() { positions = {}; }
+    function escapeHtml(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
 
     return {
-        init,
-        render,
-        highlightTable,
-        updateRelationships,
-        drawAllLines,
-        fitToScreen,
-        getPositions,
-        resetPositions,
-        setFocus,
-        clearFocus,
-        setHiddenTypes,
+        init, render, highlightTable, updateRelationships, drawAllLines,
+        fitToScreen, getPositions, resetPositions, setFocus, clearFocus,
+        setHiddenTypes, switchLayout,
     };
 })();
 ===== END: js/diagramRenderer.js =====
@@ -2435,10 +2510,10 @@ const RelationshipDetector = (() => {
     }
 
     /**
-     * Deep scan: detect relationships by comparing actual data values across tables.
-     * This finds relationships that name-based heuristics miss.
+     * Deep scan: detect relationships using multi-signal confidence scoring.
+     * Analyzes data values, types, NULL patterns, and cardinality.
      * @param {Object[]} tables
-     * @param {Object[]} existingRels - already detected relationships to avoid duplicates
+     * @param {Object[]} existingRels
      * @returns {Object[]} new relationships found
      */
     function deepScan(tables, existingRels) {
@@ -2449,89 +2524,179 @@ const RelationshipDetector = (() => {
             markPrimaryKeys(table);
         }
 
-        // For each table, for each column, try to match values against PK columns of other tables
+        // Pre-compute column stats for all tables
+        const statsCache = {};
+        for (const table of tables) {
+            statsCache[table.name] = {};
+            for (const col of table.columns) {
+                statsCache[table.name][col.name] = analyzeColumnStats(table.data, col.name);
+            }
+        }
+
         for (const srcTable of tables) {
             for (const srcCol of srcTable.columns) {
-                if (srcCol.isPK) continue; // Skip own PKs
+                if (srcCol.isPK) continue;
+                // Skip types that are never FKs
                 if (srcCol.type === 'datetime' || srcCol.type === 'text' || srcCol.type === 'bit') continue;
 
-                // Get unique non-empty values from this column (sample)
-                const srcValues = getUniqueValues(srcTable.data, srcCol.name, 200);
-                if (srcValues.size === 0) continue;
-                // Skip if too many unique values relative to row count (likely not an FK)
-                // But allow it - user wants broad detection
+                const srcStats = statsCache[srcTable.name][srcCol.name];
+                if (srcStats.uniqueValues.size < 2) continue;
 
                 for (const tgtTable of tables) {
                     if (tgtTable.name === srcTable.name) continue;
 
                     for (const tgtCol of tgtTable.columns) {
-                        // Check if this relationship already exists
                         const testRel = {
-                            fromTable: srcTable.name,
-                            fromColumn: srcCol.name,
-                            toTable: tgtTable.name,
-                            toColumn: tgtCol.name
+                            fromTable: srcTable.name, fromColumn: srcCol.name,
+                            toTable: tgtTable.name, toColumn: tgtCol.name
                         };
                         if (isDuplicate(allRels, testRel)) continue;
 
-                        // Get unique values from target column
-                        const tgtValues = getUniqueValues(tgtTable.data, tgtCol.name, 500);
-                        if (tgtValues.size === 0) continue;
+                        const tgtStats = statsCache[tgtTable.name][tgtCol.name];
+                        if (tgtStats.uniqueValues.size < 2) continue;
 
-                        // Check if source values are a subset of target values
-                        const matchCount = countMatches(srcValues, tgtValues);
-                        const matchRatio = matchCount / srcValues.size;
+                        // === Multi-signal scoring ===
+                        const score = scoreRelationship(srcCol, tgtCol, srcStats, tgtStats, srcTable, tgtTable);
 
-                        // High match ratio = likely FK relationship
-                        if (matchRatio >= 0.7 && srcValues.size >= 2 && matchCount >= 2) {
-                            // Prefer when target looks like a PK (fewer or equal unique values)
-                            // and source has repeated values (many rows, fewer unique = FK pattern)
-                            const srcUniqueRatio = srcValues.size / Math.max(srcTable.data.length, 1);
-                            const tgtUniqueRatio = tgtValues.size / Math.max(tgtTable.data.length, 1);
-
-                            // Target should have high uniqueness (like a PK) OR be marked as PK
-                            if (tgtCol.isPK || tgtUniqueRatio > 0.5 || tgtCol.name.toLowerCase().includes('id')) {
-                                const rel = {
-                                    id: generateId(),
-                                    fromTable: srcTable.name,
-                                    fromColumn: srcCol.name,
-                                    toTable: tgtTable.name,
-                                    toColumn: tgtCol.name,
-                                    type: srcUniqueRatio > 0.9 ? '1:1' : '1:N',
-                                    confidence: Math.round(matchRatio * 100),
-                                    method: 'data-scan'
-                                };
-                                newRels.push(rel);
-                                allRels.push(rel);
-                                srcCol.isFK = true;
-                            }
+                        if (score >= 0.55) {
+                            const srcUniqueRatio = srcStats.uniqueValues.size / Math.max(srcTable.data.length, 1);
+                            const rel = {
+                                id: generateId(),
+                                fromTable: srcTable.name,
+                                fromColumn: srcCol.name,
+                                toTable: tgtTable.name,
+                                toColumn: tgtCol.name,
+                                type: srcUniqueRatio > 0.9 ? '1:1' : '1:N',
+                                confidence: Math.round(score * 100),
+                                method: 'data-scan'
+                            };
+                            newRels.push(rel);
+                            allRels.push(rel);
+                            srcCol.isFK = true;
                         }
                     }
                 }
             }
         }
 
+        // Sort by confidence descending and return
+        newRels.sort((a, b) => b.confidence - a.confidence);
         return newRels;
     }
 
-    function getUniqueValues(data, colName, maxSample) {
+    /**
+     * Analyze column statistics for scoring
+     */
+    function analyzeColumnStats(data, colName) {
         const values = new Set();
-        const limit = Math.min(data.length, maxSample);
-        for (let i = 0; i < limit; i++) {
+        let nullCount = 0;
+        let totalCount = 0;
+        const sampleSize = Math.min(data.length, 500);
+
+        for (let i = 0; i < sampleSize; i++) {
+            totalCount++;
             const val = (data[i][colName] || '').toString().trim();
-            if (val && val !== '' && val !== 'NULL' && val !== 'null') {
+            if (!val || val === 'NULL' || val === 'null' || val === '') {
+                nullCount++;
+            } else {
                 values.add(val);
             }
         }
-        return values;
+
+        return {
+            uniqueValues: values,
+            nullCount: nullCount,
+            nullRatio: nullCount / Math.max(totalCount, 1),
+            uniqueRatio: values.size / Math.max(totalCount - nullCount, 1),
+            totalSampled: totalCount,
+        };
     }
 
-    function countMatches(srcValues, tgtValues) {
-        let count = 0;
-        for (const v of srcValues) {
-            if (tgtValues.has(v)) count++;
+    /**
+     * Multi-signal confidence scoring for a potential FK relationship
+     * Returns 0.0 - 1.0
+     */
+    function scoreRelationship(srcCol, tgtCol, srcStats, tgtStats, srcTable, tgtTable) {
+        let score = 0;
+
+        // === Signal 1: Value match ratio (40% weight) ===
+        let matchCount = 0;
+        for (const v of srcStats.uniqueValues) {
+            if (tgtStats.uniqueValues.has(v)) matchCount++;
         }
-        return count;
+        const matchRatio = matchCount / Math.max(srcStats.uniqueValues.size, 1);
+        score += matchRatio * 0.40;
+
+        // If no values match at all, skip
+        if (matchCount < 2) return 0;
+
+        // === Signal 2: Type compatibility (20% weight) ===
+        const typeScore = getTypeCompatibility(srcCol.type, tgtCol.type);
+        score += typeScore * 0.20;
+        // If types are incompatible, heavily penalize
+        if (typeScore === 0) return score * 0.3;
+
+        // === Signal 3: Cardinality pattern (20% weight) ===
+        // FK columns should have fewer unique values than the target PK column
+        // (many rows point to fewer distinct target values)
+        let cardScore = 0;
+        if (tgtStats.uniqueRatio > 0.7) {
+            // Target has high uniqueness (PK-like)
+            cardScore += 0.5;
+        }
+        if (tgtCol.isPK) {
+            cardScore += 0.3;
+        }
+        if (srcStats.uniqueRatio < tgtStats.uniqueRatio) {
+            // Source has more repeated values than target (FK pattern)
+            cardScore += 0.2;
+        }
+        score += Math.min(cardScore, 1) * 0.20;
+
+        // === Signal 4: NULL pattern (10% weight) ===
+        let nullScore = 0;
+        // PK columns should have zero NULLs
+        if (tgtStats.nullRatio === 0) nullScore += 0.5;
+        // FK columns may have some NULLs (optional relationships)
+        // but having zero NULLs is also fine
+        if (srcStats.nullRatio <= 0.5) nullScore += 0.5;
+        score += nullScore * 0.10;
+
+        // === Signal 5: Column name hint (10% weight) ===
+        let nameScore = 0;
+        const srcLower = srcCol.name.toLowerCase();
+        const tgtLower = tgtCol.name.toLowerCase();
+        // Source column name contains 'id', 'key', 'code', 'ref', 'fk'
+        if (/id$|_id$|key$|code$|ref$|^fk_/i.test(srcLower)) nameScore += 0.4;
+        // Target column name looks like PK
+        if (/^id$|_id$|key$|code$/i.test(tgtLower) || tgtCol.isPK) nameScore += 0.4;
+        // Source contains target table name
+        if (srcLower.includes(tgtTable.name.toLowerCase()) ||
+            srcLower.includes(singularize(tgtTable.name.toLowerCase()))) {
+            nameScore += 0.2;
+        }
+        score += Math.min(nameScore, 1) * 0.10;
+
+        return Math.min(score, 1);
+    }
+
+    /**
+     * Type compatibility check (0 = incompatible, 0.5 = partial, 1 = perfect match)
+     */
+    function getTypeCompatibility(srcType, tgtType) {
+        if (srcType === tgtType) return 1;
+        const groups = {
+            numeric: ['int', 'decimal', 'bit'],
+            text: ['varchar', 'text'],
+            time: ['datetime'],
+        };
+        for (const types of Object.values(groups)) {
+            if (types.includes(srcType) && types.includes(tgtType)) return 0.7;
+        }
+        // int/varchar can sometimes match (codes stored as strings)
+        if ((srcType === 'int' && tgtType === 'varchar') ||
+            (srcType === 'varchar' && tgtType === 'int')) return 0.3;
+        return 0;
     }
 
     /**

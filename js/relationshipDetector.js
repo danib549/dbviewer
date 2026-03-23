@@ -39,10 +39,10 @@ const RelationshipDetector = (() => {
     }
 
     /**
-     * Deep scan: detect relationships by comparing actual data values across tables.
-     * This finds relationships that name-based heuristics miss.
+     * Deep scan: detect relationships using multi-signal confidence scoring.
+     * Analyzes data values, types, NULL patterns, and cardinality.
      * @param {Object[]} tables
-     * @param {Object[]} existingRels - already detected relationships to avoid duplicates
+     * @param {Object[]} existingRels
      * @returns {Object[]} new relationships found
      */
     function deepScan(tables, existingRels) {
@@ -53,89 +53,179 @@ const RelationshipDetector = (() => {
             markPrimaryKeys(table);
         }
 
-        // For each table, for each column, try to match values against PK columns of other tables
+        // Pre-compute column stats for all tables
+        const statsCache = {};
+        for (const table of tables) {
+            statsCache[table.name] = {};
+            for (const col of table.columns) {
+                statsCache[table.name][col.name] = analyzeColumnStats(table.data, col.name);
+            }
+        }
+
         for (const srcTable of tables) {
             for (const srcCol of srcTable.columns) {
-                if (srcCol.isPK) continue; // Skip own PKs
+                if (srcCol.isPK) continue;
+                // Skip types that are never FKs
                 if (srcCol.type === 'datetime' || srcCol.type === 'text' || srcCol.type === 'bit') continue;
 
-                // Get unique non-empty values from this column (sample)
-                const srcValues = getUniqueValues(srcTable.data, srcCol.name, 200);
-                if (srcValues.size === 0) continue;
-                // Skip if too many unique values relative to row count (likely not an FK)
-                // But allow it - user wants broad detection
+                const srcStats = statsCache[srcTable.name][srcCol.name];
+                if (srcStats.uniqueValues.size < 2) continue;
 
                 for (const tgtTable of tables) {
                     if (tgtTable.name === srcTable.name) continue;
 
                     for (const tgtCol of tgtTable.columns) {
-                        // Check if this relationship already exists
                         const testRel = {
-                            fromTable: srcTable.name,
-                            fromColumn: srcCol.name,
-                            toTable: tgtTable.name,
-                            toColumn: tgtCol.name
+                            fromTable: srcTable.name, fromColumn: srcCol.name,
+                            toTable: tgtTable.name, toColumn: tgtCol.name
                         };
                         if (isDuplicate(allRels, testRel)) continue;
 
-                        // Get unique values from target column
-                        const tgtValues = getUniqueValues(tgtTable.data, tgtCol.name, 500);
-                        if (tgtValues.size === 0) continue;
+                        const tgtStats = statsCache[tgtTable.name][tgtCol.name];
+                        if (tgtStats.uniqueValues.size < 2) continue;
 
-                        // Check if source values are a subset of target values
-                        const matchCount = countMatches(srcValues, tgtValues);
-                        const matchRatio = matchCount / srcValues.size;
+                        // === Multi-signal scoring ===
+                        const score = scoreRelationship(srcCol, tgtCol, srcStats, tgtStats, srcTable, tgtTable);
 
-                        // High match ratio = likely FK relationship
-                        if (matchRatio >= 0.7 && srcValues.size >= 2 && matchCount >= 2) {
-                            // Prefer when target looks like a PK (fewer or equal unique values)
-                            // and source has repeated values (many rows, fewer unique = FK pattern)
-                            const srcUniqueRatio = srcValues.size / Math.max(srcTable.data.length, 1);
-                            const tgtUniqueRatio = tgtValues.size / Math.max(tgtTable.data.length, 1);
-
-                            // Target should have high uniqueness (like a PK) OR be marked as PK
-                            if (tgtCol.isPK || tgtUniqueRatio > 0.5 || tgtCol.name.toLowerCase().includes('id')) {
-                                const rel = {
-                                    id: generateId(),
-                                    fromTable: srcTable.name,
-                                    fromColumn: srcCol.name,
-                                    toTable: tgtTable.name,
-                                    toColumn: tgtCol.name,
-                                    type: srcUniqueRatio > 0.9 ? '1:1' : '1:N',
-                                    confidence: Math.round(matchRatio * 100),
-                                    method: 'data-scan'
-                                };
-                                newRels.push(rel);
-                                allRels.push(rel);
-                                srcCol.isFK = true;
-                            }
+                        if (score >= 0.55) {
+                            const srcUniqueRatio = srcStats.uniqueValues.size / Math.max(srcTable.data.length, 1);
+                            const rel = {
+                                id: generateId(),
+                                fromTable: srcTable.name,
+                                fromColumn: srcCol.name,
+                                toTable: tgtTable.name,
+                                toColumn: tgtCol.name,
+                                type: srcUniqueRatio > 0.9 ? '1:1' : '1:N',
+                                confidence: Math.round(score * 100),
+                                method: 'data-scan'
+                            };
+                            newRels.push(rel);
+                            allRels.push(rel);
+                            srcCol.isFK = true;
                         }
                     }
                 }
             }
         }
 
+        // Sort by confidence descending and return
+        newRels.sort((a, b) => b.confidence - a.confidence);
         return newRels;
     }
 
-    function getUniqueValues(data, colName, maxSample) {
+    /**
+     * Analyze column statistics for scoring
+     */
+    function analyzeColumnStats(data, colName) {
         const values = new Set();
-        const limit = Math.min(data.length, maxSample);
-        for (let i = 0; i < limit; i++) {
+        let nullCount = 0;
+        let totalCount = 0;
+        const sampleSize = Math.min(data.length, 500);
+
+        for (let i = 0; i < sampleSize; i++) {
+            totalCount++;
             const val = (data[i][colName] || '').toString().trim();
-            if (val && val !== '' && val !== 'NULL' && val !== 'null') {
+            if (!val || val === 'NULL' || val === 'null' || val === '') {
+                nullCount++;
+            } else {
                 values.add(val);
             }
         }
-        return values;
+
+        return {
+            uniqueValues: values,
+            nullCount: nullCount,
+            nullRatio: nullCount / Math.max(totalCount, 1),
+            uniqueRatio: values.size / Math.max(totalCount - nullCount, 1),
+            totalSampled: totalCount,
+        };
     }
 
-    function countMatches(srcValues, tgtValues) {
-        let count = 0;
-        for (const v of srcValues) {
-            if (tgtValues.has(v)) count++;
+    /**
+     * Multi-signal confidence scoring for a potential FK relationship
+     * Returns 0.0 - 1.0
+     */
+    function scoreRelationship(srcCol, tgtCol, srcStats, tgtStats, srcTable, tgtTable) {
+        let score = 0;
+
+        // === Signal 1: Value match ratio (40% weight) ===
+        let matchCount = 0;
+        for (const v of srcStats.uniqueValues) {
+            if (tgtStats.uniqueValues.has(v)) matchCount++;
         }
-        return count;
+        const matchRatio = matchCount / Math.max(srcStats.uniqueValues.size, 1);
+        score += matchRatio * 0.40;
+
+        // If no values match at all, skip
+        if (matchCount < 2) return 0;
+
+        // === Signal 2: Type compatibility (20% weight) ===
+        const typeScore = getTypeCompatibility(srcCol.type, tgtCol.type);
+        score += typeScore * 0.20;
+        // If types are incompatible, heavily penalize
+        if (typeScore === 0) return score * 0.3;
+
+        // === Signal 3: Cardinality pattern (20% weight) ===
+        // FK columns should have fewer unique values than the target PK column
+        // (many rows point to fewer distinct target values)
+        let cardScore = 0;
+        if (tgtStats.uniqueRatio > 0.7) {
+            // Target has high uniqueness (PK-like)
+            cardScore += 0.5;
+        }
+        if (tgtCol.isPK) {
+            cardScore += 0.3;
+        }
+        if (srcStats.uniqueRatio < tgtStats.uniqueRatio) {
+            // Source has more repeated values than target (FK pattern)
+            cardScore += 0.2;
+        }
+        score += Math.min(cardScore, 1) * 0.20;
+
+        // === Signal 4: NULL pattern (10% weight) ===
+        let nullScore = 0;
+        // PK columns should have zero NULLs
+        if (tgtStats.nullRatio === 0) nullScore += 0.5;
+        // FK columns may have some NULLs (optional relationships)
+        // but having zero NULLs is also fine
+        if (srcStats.nullRatio <= 0.5) nullScore += 0.5;
+        score += nullScore * 0.10;
+
+        // === Signal 5: Column name hint (10% weight) ===
+        let nameScore = 0;
+        const srcLower = srcCol.name.toLowerCase();
+        const tgtLower = tgtCol.name.toLowerCase();
+        // Source column name contains 'id', 'key', 'code', 'ref', 'fk'
+        if (/id$|_id$|key$|code$|ref$|^fk_/i.test(srcLower)) nameScore += 0.4;
+        // Target column name looks like PK
+        if (/^id$|_id$|key$|code$/i.test(tgtLower) || tgtCol.isPK) nameScore += 0.4;
+        // Source contains target table name
+        if (srcLower.includes(tgtTable.name.toLowerCase()) ||
+            srcLower.includes(singularize(tgtTable.name.toLowerCase()))) {
+            nameScore += 0.2;
+        }
+        score += Math.min(nameScore, 1) * 0.10;
+
+        return Math.min(score, 1);
+    }
+
+    /**
+     * Type compatibility check (0 = incompatible, 0.5 = partial, 1 = perfect match)
+     */
+    function getTypeCompatibility(srcType, tgtType) {
+        if (srcType === tgtType) return 1;
+        const groups = {
+            numeric: ['int', 'decimal', 'bit'],
+            text: ['varchar', 'text'],
+            time: ['datetime'],
+        };
+        for (const types of Object.values(groups)) {
+            if (types.includes(srcType) && types.includes(tgtType)) return 0.7;
+        }
+        // int/varchar can sometimes match (codes stored as strings)
+        if ((srcType === 'int' && tgtType === 'varchar') ||
+            (srcType === 'varchar' && tgtType === 'int')) return 0.3;
+        return 0;
     }
 
     /**

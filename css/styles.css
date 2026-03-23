@@ -254,6 +254,43 @@ body {
     padding: 1px 6px;
     border-radius: 8px;
 }
+/* Layout Toggle */
+.layout-toggle {
+    display: flex;
+    background: var(--bg-primary);
+    border-radius: var(--radius);
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+.layout-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 5px 12px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all var(--transition);
+    border-right: 1px solid var(--border-color);
+}
+.layout-btn:last-child {
+    border-right: none;
+}
+.layout-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+.layout-btn.active {
+    background: var(--accent);
+    color: white;
+    font-weight: 600;
+}
+.toolbar-sep {
+    width: 1px;
+    height: 24px;
+    background: var(--border-color);
+    margin: 0 4px;
+}
+
 .zoom-label {
     color: var(--text-muted);
     font-size: 0.8rem;
