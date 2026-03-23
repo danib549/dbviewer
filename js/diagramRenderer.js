@@ -47,6 +47,9 @@ const DiagramRenderer = (() => {
         document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(scale + 0.1));
         document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(scale - 0.1));
         document.getElementById('btn-zoom-fit').addEventListener('click', fitToScreen);
+
+        // Redraw lines on window resize
+        window.addEventListener('resize', () => drawAllLines());
     }
 
     /**
@@ -255,6 +258,7 @@ const DiagramRenderer = (() => {
             panX = e.clientX - panStartX;
             panY = e.clientY - panStartY;
             applyTransform();
+            drawAllLines();
         }
     }
 
@@ -296,6 +300,7 @@ const DiagramRenderer = (() => {
             panX = e.touches[0].clientX - panStartX;
             panY = e.touches[0].clientY - panStartY;
             applyTransform();
+            drawAllLines();
         }
     }
 
